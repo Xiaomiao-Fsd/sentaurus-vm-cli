@@ -1,0 +1,422 @@
+import { access } from "node:fs/promises";
+import path from "node:path";
+import { createInterface } from "node:readline/promises";
+import process from "node:process";
+import { SentaurusApi } from "./api.js";
+import { updateStoredConfig } from "./config.js";
+import type {
+  RunSummary,
+  VmAgentAttachmentRef,
+  VmAgentHistoryResponse,
+  VmAgentMessage,
+  VmAgentMessageAttachment,
+  VmAgentStatus,
+  VmSessionOutputFile
+} from "./types.js";
+import { messageTurnId, mergeMessages } from "./messages.js";
+import { printBanner, printError, printFiles, printHistory, printRuns, shortId, statusLine, style, TurnRenderer } from "./ui.js";
+
+export type ChatOptions = {
+  configPath: string;
+  sessionId?: string;
+  title?: string;
+  timeoutMs?: number;
+  showHistory?: boolean;
+  attachments?: string[];
+};
+
+type PendingAttachment = {
+  ref: VmAgentAttachmentRef;
+  display: VmAgentMessageAttachment;
+};
+
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => signal?.removeEventListener("abort", abort);
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, ms);
+    const abort = () => {
+      clearTimeout(timer);
+      cleanup();
+      reject(signal?.reason || new DOMException("Aborted", "AbortError"));
+    };
+    if (signal?.aborted) abort();
+    else signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
+export function splitCommandLine(value: string): string[] {
+  const result: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | undefined;
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (!character) continue;
+    if (quote) {
+      if (character === quote) quote = undefined;
+      else if (character === "\\" && quote === '"' && (value[index + 1] === '"' || value[index + 1] === "\\")) current += value[++index];
+      else current += character;
+    } else if (character === "'" || character === '"') {
+      quote = character;
+    } else if (/\s/.test(character)) {
+      if (current) {
+        result.push(current);
+        current = "";
+      }
+    } else {
+      current += character;
+    }
+  }
+  if (quote) throw new Error("Unclosed quote");
+  if (current) result.push(current);
+  return result;
+}
+
+function findRun(runs: RunSummary[], selector: string): RunSummary {
+  const exact = runs.find((run) => run.id === selector);
+  if (exact) return exact;
+  const matches = runs.filter((run) => run.id.startsWith(selector));
+  if (matches.length === 1 && matches[0]) return matches[0];
+  if (matches.length > 1) throw new Error(`Session prefix is ambiguous: ${selector}`);
+  throw new Error(`Session not found: ${selector}`);
+}
+
+export async function resolveSession(
+  api: SentaurusApi,
+  selector?: string,
+  fallbackId?: string,
+  title?: string
+): Promise<RunSummary> {
+  const runs = await api.listRuns();
+  if (selector) return findRun(runs, selector);
+  if (fallbackId) {
+    const existing = runs.find((run) => run.id === fallbackId);
+    if (existing) return existing;
+  }
+  if (runs[0]) return runs[0];
+  return api.createRun(title || `CLI session ${new Date().toISOString()}`);
+}
+
+function turnIdFrom(messages: VmAgentMessage[], sessionId: string): string | undefined {
+  return messages.map((message) => messageTurnId(message))
+    .find((value, index) => value && messages[index]?.meta?.sessionId === sessionId);
+}
+
+async function pollForReply(
+  api: SentaurusApi,
+  cursor: number,
+  sessionId: string,
+  turnId: string | undefined,
+  renderer: TurnRenderer,
+  signal: AbortSignal
+): Promise<void> {
+  let nextCursor = cursor;
+  while (!signal.aborted) {
+    const result = await api.messages(nextCursor, { limit: 100, sessionId, signal });
+    nextCursor = result.cursor;
+    if (renderer.render(result.messages, sessionId, turnId)) return;
+    await delay(900, signal);
+  }
+}
+
+export async function waitForReply(
+  api: SentaurusApi,
+  initial: VmAgentHistoryResponse,
+  sessionId: string,
+  renderer: TurnRenderer,
+  options: { timeoutMs: number; signal?: AbortSignal }
+): Promise<void> {
+  const turnId = turnIdFrom(initial.messages, sessionId);
+  if (renderer.render(initial.messages, sessionId, turnId)) return;
+
+  const streamController = new AbortController();
+  const timeoutController = new AbortController();
+  const timeout = setTimeout(() => timeoutController.abort(new Error(`Timed out after ${Math.round(options.timeoutMs / 1000)} seconds`)), options.timeoutMs);
+  const signals = [streamController.signal, timeoutController.signal];
+  if (options.signal) signals.push(options.signal);
+  const signal = AbortSignal.any(signals);
+  let complete = false;
+  let cursor = initial.cursor;
+  let streamFailure: Error | undefined;
+
+  try {
+    try {
+      await api.streamMessages(cursor, (event) => {
+        if (event.event === "error") {
+          const data = event.data as { message?: unknown };
+          streamFailure = new Error(typeof data?.message === "string" ? data.message : "SSE bridge error");
+          streamController.abort();
+          return;
+        }
+        if (event.event !== "messages" || !event.data || typeof event.data !== "object") return;
+        const result = event.data as VmAgentHistoryResponse;
+        if (typeof result.cursor === "number") cursor = result.cursor;
+        if (renderer.render(result.messages || [], sessionId, turnId)) {
+          complete = true;
+          streamController.abort();
+        }
+      }, signal);
+    } catch (error) {
+      if (complete) return;
+      if (options.signal?.aborted) throw options.signal.reason || error;
+      if (timeoutController.signal.aborted) throw timeoutController.signal.reason || error;
+      if (!streamController.signal.aborted && error instanceof Error) streamFailure = error;
+    }
+    if (complete) return;
+    if (streamFailure) process.stdout.write(`${style.dim(`Streaming unavailable (${streamFailure.message}); polling instead.`)}\n`);
+    const pollSignals = options.signal ? [timeoutController.signal, options.signal] : [timeoutController.signal];
+    await pollForReply(api, cursor, sessionId, turnId, renderer, AbortSignal.any(pollSignals));
+  } finally {
+    clearTimeout(timeout);
+    streamController.abort();
+  }
+}
+
+export async function sendTurn(
+  api: SentaurusApi,
+  sessionId: string,
+  text: string,
+  pending: PendingAttachment[],
+  timeoutMs: number,
+  signal?: AbortSignal
+): Promise<void> {
+  const names = pending.map((item) => item.ref.name);
+  const attachmentLine = names.length ? `\n\nAttachments available to the VM agent: ${names.join(", ")}.` : "";
+  const visibleText = text.trim() || `Attached ${names.length} file${names.length === 1 ? "" : "s"}.`;
+  const response = await api.sendMessage(
+    `${visibleText}${attachmentLine}`,
+    sessionId,
+    pending.map((item) => item.ref),
+    pending.map((item) => item.display),
+    signal
+  );
+  await waitForReply(api, response, sessionId, new TurnRenderer(), { timeoutMs, ...(signal ? { signal } : {}) });
+}
+
+async function uploadAttachments(api: SentaurusApi, sessionId: string, paths: string[]): Promise<PendingAttachment[]> {
+  const result: PendingAttachment[] = [];
+  for (const localPath of paths) {
+    const resolved = path.resolve(localPath);
+    await access(resolved);
+    process.stdout.write(`${style.dim(`Uploading ${resolved}...`)}\n`);
+    const uploaded = await api.uploadFile(sessionId, resolved);
+    result.push({ ref: uploaded.ref, display: uploaded.display });
+    const sync = uploaded.response.vmSync.ok ? "VM synced" : "inline fallback";
+    process.stdout.write(`${style.green("attached")} ${uploaded.ref.name} (${sync})\n`);
+  }
+  return result;
+}
+
+function printLocalHelp(): void {
+  process.stdout.write(`
+Local commands:
+  /new [title]                  Create and switch to a session
+  /resume <id-prefix>           Switch to an existing session
+  /sessions                     List sessions
+  /session                      Show the current session
+  /history                      Reload recent conversation
+  /attach <path> [...]          Upload files for the next message
+  /attachments                  List pending attachments
+  /detach <number|all>          Remove pending attachments
+  /files                        List VM session output files
+  /download <number|path> [out] Download a listed session file
+  /artifact <run-id> <path> [out] Download a run artifact
+  /connect                      Deploy/restart the VM worker over SSH
+  /doctor                       Show API and VM bridge status
+  /clear                        Clear the terminal
+  /exit                         Exit the CLI
+
+Other slash commands are sent to the VM worker, including /goal, /side,
+/status, /tools, /instances, and /sentaurus-status.
+
+`);
+}
+
+function matchingFile(files: VmSessionOutputFile[], selector: string): VmSessionOutputFile {
+  const index = Number.parseInt(selector, 10);
+  const indexed = files[index - 1];
+  if (Number.isInteger(index) && String(index) === selector && indexed) return indexed;
+  const exact = files.find((file) => file.path === selector);
+  if (exact) return exact;
+  const matches = files.filter((file) => file.path.endsWith(selector));
+  if (matches.length === 1 && matches[0]) return matches[0];
+  if (matches.length > 1) throw new Error(`File selector is ambiguous: ${selector}`);
+  throw new Error(`File not found: ${selector}`);
+}
+
+export async function oneShotChat(
+  api: SentaurusApi,
+  message: string,
+  options: ChatOptions,
+  fallbackSessionId?: string
+): Promise<RunSummary> {
+  const session = await resolveSession(api, options.sessionId, fallbackSessionId, options.title);
+  await updateStoredConfig({ lastSessionId: session.id }, options.configPath);
+  const status = await api.status();
+  printBanner(api.baseUrl, session, status);
+  const pending = await uploadAttachments(api, session.id, options.attachments || []);
+  await sendTurn(api, session.id, message, pending, options.timeoutMs || 30 * 60_000);
+  return session;
+}
+
+export async function interactiveChat(
+  api: SentaurusApi,
+  options: ChatOptions,
+  fallbackSessionId?: string
+): Promise<void> {
+  let session = await resolveSession(api, options.sessionId, fallbackSessionId, options.title);
+  await updateStoredConfig({ lastSessionId: session.id }, options.configPath);
+  let status = await api.status();
+  let files: VmSessionOutputFile[] = [];
+  let pending = await uploadAttachments(api, session.id, options.attachments || []);
+  printBanner(api.baseUrl, session, status);
+
+  if (options.showHistory !== false) {
+    const history = await api.messages(0, { limit: 200, sessionId: session.id });
+    printHistory(mergeMessages([], history.messages));
+  }
+
+  const readline = createInterface({ input: process.stdin, output: process.stdout, terminal: true, historySize: 100 });
+  let activeController: AbortController | undefined;
+  let exiting = false;
+  const onSigint = () => {
+    if (activeController) {
+      activeController.abort(new Error("Turn cancelled"));
+      process.stdout.write("\n");
+    } else {
+      exiting = true;
+      readline.close();
+    }
+  };
+  process.on("SIGINT", onSigint);
+
+  try {
+    while (!exiting) {
+      let input: string;
+      try {
+        input = (await readline.question(`${style.cyan("sentaurus")}> `)).trim();
+      } catch {
+        break;
+      }
+      if (!input) continue;
+
+      try {
+        const parts = input.startsWith("/") ? splitCommandLine(input) : [];
+        const command = parts[0]?.toLowerCase();
+        if (command === "/exit" || command === "/quit") break;
+        if (command === "/help") {
+          printLocalHelp();
+          continue;
+        }
+        if (command === "/clear") {
+          process.stdout.write("\u001bc");
+          continue;
+        }
+        if (command === "/session") {
+          process.stdout.write(`${session.id}  ${session.status}  ${session.title}\n`);
+          continue;
+        }
+        if (command === "/sessions") {
+          printRuns(await api.listRuns(), session.id);
+          continue;
+        }
+        if (command === "/new") {
+          session = await api.createRun(parts.slice(1).join(" ") || `CLI session ${new Date().toISOString()}`);
+          pending = [];
+          files = [];
+          await updateStoredConfig({ lastSessionId: session.id }, options.configPath);
+          process.stdout.write(`${style.green("session created")} ${session.id}\n`);
+          continue;
+        }
+        if (command === "/resume") {
+          if (!parts[1]) throw new Error("Usage: /resume <session-id-or-prefix>");
+          session = findRun(await api.listRuns(), parts[1]);
+          pending = [];
+          files = [];
+          await updateStoredConfig({ lastSessionId: session.id }, options.configPath);
+          const history = await api.messages(0, { limit: 200, sessionId: session.id });
+          process.stdout.write(`${style.green("resumed")} ${session.id}\n\n`);
+          printHistory(mergeMessages([], history.messages));
+          continue;
+        }
+        if (command === "/history") {
+          const history = await api.messages(0, { limit: 200, sessionId: session.id });
+          printHistory(mergeMessages([], history.messages), 30);
+          continue;
+        }
+        if (command === "/attach") {
+          if (parts.length < 2) throw new Error("Usage: /attach <path> [...]");
+          pending.push(...await uploadAttachments(api, session.id, parts.slice(1)));
+          continue;
+        }
+        if (command === "/attachments") {
+          if (!pending.length) process.stdout.write("No pending attachments.\n");
+          pending.forEach((item, index) => process.stdout.write(`${index + 1}  ${item.ref.name}  ${item.ref.source}\n`));
+          continue;
+        }
+        if (command === "/detach") {
+          if (!parts[1]) throw new Error("Usage: /detach <number|all>");
+          if (parts[1].toLowerCase() === "all") pending = [];
+          else {
+            const index = Number.parseInt(parts[1], 10) - 1;
+            if (!pending[index]) throw new Error(`Attachment not found: ${parts[1]}`);
+            pending.splice(index, 1);
+          }
+          continue;
+        }
+        if (command === "/files") {
+          files = (await api.sessionFiles(session.id)).files;
+          printFiles(files);
+          continue;
+        }
+        if (command === "/download") {
+          if (!parts[1]) throw new Error("Usage: /download <number|path> [output]");
+          if (!files.length) files = (await api.sessionFiles(session.id)).files;
+          const file = matchingFile(files, parts[1]);
+          const destination = await api.downloadSessionFile(session.id, file.category, file.path, parts[2]);
+          process.stdout.write(`${style.green("downloaded")} ${destination}\n`);
+          continue;
+        }
+        if (command === "/artifact") {
+          if (!parts[1] || !parts[2]) throw new Error("Usage: /artifact <run-id> <path> [output]");
+          const destination = await api.downloadArtifact(parts[1], parts[2], parts[3]);
+          process.stdout.write(`${style.green("downloaded")} ${destination}\n`);
+          continue;
+        }
+        if (command === "/connect") {
+          process.stdout.write(`${style.dim("Deploying and restarting the VM worker...")}\n`);
+          const connected = await api.connect();
+          status = connected.status;
+          process.stdout.write(`${statusLine(status)}\n`);
+          continue;
+        }
+        if (command === "/doctor") {
+          const health = await api.health();
+          status = await api.status();
+          process.stdout.write(`API ${health.ok ? "ok" : "failed"} | ${statusLine(status)}\n`);
+          continue;
+        }
+
+        activeController = new AbortController();
+        const sent = pending;
+        pending = [];
+        try {
+          process.stdout.write(`${style.dim(`session ${shortId(session.id)} - working`)}\n`);
+          await sendTurn(api, session.id, input, sent, options.timeoutMs || 30 * 60_000, activeController.signal);
+        } catch (error) {
+          pending.unshift(...sent);
+          throw error;
+        } finally {
+          activeController = undefined;
+        }
+      } catch (error) {
+        printError(error);
+      }
+    }
+  } finally {
+    process.off("SIGINT", onSigint);
+    readline.close();
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "name": "sentaurus-vm-cli",
+  "version": "0.1.0",
+  "description": "Codex-style terminal client for the Sentaurus VM Agent SSH bridge",
+  "type": "module",
+  "bin": {
+    "sentaurus-vm": "dist/index.js",
+    "svm": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "docs",
+    "scripts",
+    "README.md",
+    "LICENSE",
+    "SECURITY.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/index.ts",
+    "test": "node --import tsx --test test/*.test.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "check": "npm run typecheck && npm test && npm run build",
+    "prepare": "npm run build"
+  },
+  "engines": {
+    "node": ">=20.12"
+  },
+  "keywords": [
+    "sentaurus",
+    "tcad",
+    "cli",
+    "ssh"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Xiaomiao-Fsd/sentaurus-vm-cli.git"
+  },
+  "homepage": "https://github.com/Xiaomiao-Fsd/sentaurus-vm-cli#readme",
+  "bugs": {
+    "url": "https://github.com/Xiaomiao-Fsd/sentaurus-vm-cli/issues"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.8.0"
+  }
+}
