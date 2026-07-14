@@ -24,10 +24,11 @@ import { mergeMessages } from "./messages.js";
 import { parseVmAgentModel } from "./models.js";
 import { askLine, askSecret } from "./prompt.js";
 import { buildReviewPrompt } from "./review.js";
+import { configureUtf8Terminal, relaunchForWindowsUtf8IfNeeded } from "./terminal.js";
 import type { RunSummary, VmSessionOutputCategory } from "./types.js";
 import { printError, printFiles, printHistory, printModelCatalog, printRuns, statusLine, style } from "./ui.js";
 
-const VERSION = "0.4.0";
+const VERSION = "0.4.1";
 const categories = new Set<VmSessionOutputCategory>([
   "我的输入",
   "仿真结果文件",
@@ -204,6 +205,7 @@ async function saveSessionMetadata(
 }
 
 export async function runCli(argv = process.argv.slice(2)): Promise<void> {
+  configureUtf8Terminal();
   const parsed = parseArgs({
     args: argv,
     allowPositionals: true,
@@ -566,6 +568,7 @@ export async function runCli(argv = process.argv.slice(2)): Promise<void> {
 }
 
 export function executeCli(argv = process.argv.slice(2)): void {
+  if (relaunchForWindowsUtf8IfNeeded()) return;
   runCli(argv).catch((error) => {
     if (argv.includes("--json")) {
       process.stdout.write(`${JSON.stringify({ type: "error", message: error instanceof Error ? error.message : String(error) })}\n`);

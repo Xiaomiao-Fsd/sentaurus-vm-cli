@@ -22,6 +22,7 @@ test("feature list exposes migrated Codex-style capabilities", () => {
   assert.ok(cliFeatures.some((feature) => feature.name === "non_interactive_exec"));
   assert.ok(cliFeatures.some((feature) => feature.name === "session_lifecycle"));
   assert.ok(cliFeatures.some((feature) => feature.name === "model_switching"));
+  assert.ok(cliFeatures.some((feature) => feature.name === "unicode_input"));
   assert.match(formatFeatureList(), /jsonl_events/);
 });
 

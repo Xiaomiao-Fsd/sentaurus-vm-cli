@@ -15,6 +15,7 @@ import type {
 } from "./types.js";
 import { messageTurnId, mergeMessages } from "./messages.js";
 import { parseVmAgentModel } from "./models.js";
+import { askChatInput } from "./terminal.js";
 import {
   JsonlTurnRenderer,
   printBanner,
@@ -375,7 +376,7 @@ export async function interactiveChat(
     while (!exiting) {
       let input: string;
       try {
-        input = (await readline.question(`${style.cyan("sentaurus")}> `)).trim();
+        input = (await askChatInput(readline)).trim();
       } catch {
         break;
       }

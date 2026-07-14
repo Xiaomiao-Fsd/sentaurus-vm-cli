@@ -1,6 +1,6 @@
-# VM Agent CLI 指令功能参考总览
+﻿# VM Agent CLI 指令功能参考总览
 
-适用版本：`sentaurus-vm-cli 0.4.0`
+适用版本：`sentaurus-vm-cli 0.4.1`
 
 Codex 对照基线：本机安装的 `codex-cli 0.144.3` 实际命令帮助，核对日期为
 2026-07-14。本文既是使用手册，也是 Codex CLI 能力移植清单。
@@ -262,7 +262,10 @@ vm-agent artifact sentaurus-run-id plots\idvg.png --output .\idvg.png
 
 ## 9. 交互模式本地命令
 
-在 `vm-agent` 交互提示符中输入 `/help` 可查看：
+`vm-agent` 会显示带 `Message` 标题的输入框。Windows OpenSSH 会话启动 CLI 时会自动把
+控制台从代码页 936 切换到 UTF-8，因此可以直接输入或粘贴中文；按 Enter 发送。
+
+在输入框中输入 `/help` 可查看：
 
 | 命令 | 功能 |
 | --- | --- |
@@ -349,7 +352,7 @@ sentaurus-vm completion fish | source
 
 | Codex 0.144.3 能力 | VM Agent CLI 状态 | 处理方式 |
 | --- | --- | --- |
-| 交互 TUI/chat | 已移植 | 采用 inline readline，保留终端 scrollback |
+| 交互 TUI/chat | 已移植 | 带框 UTF-8 输入区，支持中文、行编辑和终端 scrollback |
 | `exec` 非交互 | 已移植 | 支持参数、stdin、JSONL、timeout |
 | `exec resume --last` | 已移植 | 支持 ID/标题和最新活跃会话 |
 | `review` | 已领域化移植 | 从 Git diff review 改为 Sentaurus deck/result review |

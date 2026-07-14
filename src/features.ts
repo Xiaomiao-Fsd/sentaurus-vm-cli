@@ -7,6 +7,7 @@ export type CliFeature = {
 
 export const cliFeatures: CliFeature[] = [
   { name: "interactive_chat", stage: "stable", source: "cli", description: "Persistent terminal chat with local slash commands" },
+  { name: "unicode_input", stage: "stable", source: "cli", description: "Boxed UTF-8 terminal input with CJK text support" },
   { name: "non_interactive_exec", stage: "stable", source: "cli", description: "Single-turn execution with stdin support" },
   { name: "jsonl_events", stage: "stable", source: "cli", description: "Streaming machine-readable events for automation" },
   { name: "output_last_message", stage: "stable", source: "cli", description: "Write the final agent response to a file" },

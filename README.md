@@ -42,6 +42,7 @@ CentOS 7 VM worker
 - Sentaurus 专用 `review`，以及会话重命名、归档、取消归档和确认删除
 - `-C/--cd`、`-i/--image` 与 PowerShell/Bash/Zsh/Fish 命令补全
 - 五模型白名单切换、固定 `max` 推理，以及非 GPT-5.6 272k / GPT-5.6 353k 上下文策略
+- Codex 风格带框输入区；Windows SSH 会话自动切换 UTF-8，可直接输入和粘贴中文
 
 ## 环境要求
 
@@ -88,6 +89,7 @@ vm-agent
 `vm-agent` 会在 Windows 主机内部完成：定位 `Sentaurus-agent` 仓库、读取本地 `.env`、
 启动/等待 Fastify 服务、通过 `sentaurus-centos7` SSH 检查 CentOS 7 worker、仅在 worker
 未运行时执行 `connect`，最后进入交互会话。token 不需要传给外部设备，也不会出现在命令行。
+进入交互会话后，在 `Message` 边框内直接输入中文并按 Enter 发送。
 
 单次执行也可以使用同一个固定命令：
 

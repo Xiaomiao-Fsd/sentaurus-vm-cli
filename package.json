@@ -1,6 +1,6 @@
 {
   "name": "sentaurus-vm-cli",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Codex-style terminal client for the Sentaurus VM Agent SSH bridge",
   "type": "module",
   "bin": {
