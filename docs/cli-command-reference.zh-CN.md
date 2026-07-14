@@ -1,6 +1,6 @@
 # VM Agent CLI 指令功能参考总览
 
-适用版本：`sentaurus-vm-cli 0.3.0`
+适用版本：`sentaurus-vm-cli 0.4.0`
 
 Codex 对照基线：本机安装的 `codex-cli 0.144.3` 实际命令帮助，核对日期为
 2026-07-14。本文既是使用手册，也是 Codex CLI 能力移植清单。
@@ -79,6 +79,8 @@ vm-agent exec resume --last "/status"
 vm-agent exec /status --json --output .\last-response.txt
 vm-agent doctor --json
 vm-agent status --json
+vm-agent models
+vm-agent model gpt-5.6-sol
 ```
 
 ## 3. 顶层命令总览
@@ -103,6 +105,9 @@ vm-agent status --json
 | `status` | 查看桥接、worker、模型和队列状态 | 是 |
 | `connect` | 部署或重启 CentOS worker | 是，会改变 worker 状态 |
 | `doctor` | 检查 API、认证、SSH、worker 和 Sentaurus 工具 | 是 |
+| `models [--json]` | 列出五个允许模型、当前模型和上下文总量 | 是 |
+| `model [list|current]` | 显示当前模型及模型库 | 是 |
+| `model <NAME>`、`model set <NAME>` | 原子更新 VM 配置并重启 worker | 是，会改变 worker 状态 |
 | `features` | 列出当前 CLI/host/worker 能力 | 否 |
 | `completion [SHELL]` | 生成 PowerShell/Bash/Zsh/Fish 补全脚本 | 否 |
 | `login` | 保存远程 API URL 和 token | 是 |
@@ -112,7 +117,52 @@ vm-agent status --json
 
 会话选择器可以使用完整 ID、唯一 ID 前缀、完整标题或唯一标题前缀。标题匹配不区分大小写。
 
-## 4. 非交互执行
+## 4. 模型查询与切换
+
+```powershell
+vm-agent models
+vm-agent models --json
+vm-agent model
+vm-agent model list
+vm-agent model current
+vm-agent model gpt-5.6-sol
+vm-agent model set gpt-5.6-terra
+```
+
+模型库是服务端和 worker 双重校验的闭集，只允许：
+
+| 模型 | 上下文总数 | 推理等级 |
+| --- | ---: | --- |
+| `gpt-5.4` | 272,000 tokens | `max` |
+| `gpt-5.5` | 272,000 tokens | `max` |
+| `gpt-5.6-luna` | 353,000 tokens | `max` |
+| `gpt-5.6-terra` | 353,000 tokens | `max` |
+| `gpt-5.6-sol` | 353,000 tokens | `max` |
+
+切换过程：
+
+- Windows 服务端先校验模型名，未知模型返回 HTTP 400。
+- VM 内只原子替换 `.env` 的 `LLM_MODEL`、`LLM_MODELS`、`LLM_API_STYLE`、
+  `LLM_REASONING_EFFORT` 和模型超时，不读取或回传 API key。
+- 切换后自动重新部署并重启 worker；会话历史、目标、Sentaurus 文件和凭据保留。
+- `LLM_MODELS` 只保存当前所选模型，不做跨模型静默回退；失败会明确返回错误。
+- Responses 请求固定发送 `reasoning.effort=max`，模型 HTTP 超时默认 600 秒。
+- 272k/353k 是总窗口。worker 在 85% 时压缩上下文、95% 时执行硬保护，为最终回复保留空间。
+
+对应保护阈值：
+
+| 模型族 | 总窗口 | 软压缩阈值 | 硬保护阈值 |
+| --- | ---: | ---: | ---: |
+| `gpt-5.4`、`gpt-5.5` | 272,000 | 231,200 | 258,400 |
+| `gpt-5.6-*` | 353,000 | 300,050 | 335,350 |
+
+状态行会显示类似：
+
+```text
+connected | worker running | gpt-5.6-sol max | context 353k | queue 0
+```
+
+## 5. 非交互执行
 
 ### 4.1 `exec`
 
@@ -142,7 +192,7 @@ vm-agent exec review [INSTRUCTIONS]
 - 没发现缺陷时明确说明，并列出剩余验证缺口；
 - 默认不启动或重跑仿真，除非指令明确要求。
 
-## 5. JSON 与 JSONL
+## 6. JSON 与 JSONL
 
 `status`、`doctor`、`sessions`、`history`、`features` 等查询命令的 `--json` 输出单个 JSON 文档。
 
@@ -171,7 +221,7 @@ $final.finalResponse
 
 不要在 JSONL 模式下启动无提示的交互聊天；CLI 会要求改用 `exec`。
 
-## 6. 会话生命周期
+## 7. 会话生命周期
 
 ```powershell
 vm-agent new "28 nm MOSFET Id-Vg"
@@ -194,7 +244,7 @@ vm-agent delete run_20260714 --force
   自己的历史、目标或 VM session 输出没有统一删除 API，因此不能把它理解为跨主机安全擦除。
 - `--ephemeral` 的清理范围与 `delete` 相同。
 
-## 7. 文件、图片和工作目录
+## 8. 文件、图片和工作目录
 
 ```powershell
 vm-agent exec "检查附件" --attach .\device.cmd
@@ -210,7 +260,7 @@ vm-agent artifact sentaurus-run-id plots\idvg.png --output .\idvg.png
 - `-C/--cd` 在执行命令前切换工作目录，影响相对附件路径和输出路径。
 - 下载时如果文件名不能唯一确定 category，必须传 `--category`。
 
-## 8. 交互模式本地命令
+## 9. 交互模式本地命令
 
 在 `vm-agent` 交互提示符中输入 `/help` 可查看：
 
@@ -230,13 +280,15 @@ vm-agent artifact sentaurus-run-id plots\idvg.png --output .\idvg.png
 | `/download <number|path> [out]` | 下载列表中的文件 |
 | `/artifact <run-id> <path> [out]` | 下载 run artifact |
 | `/connect` | 部署并重启 worker |
+| `/model`、`/model list` | 显示当前模型和五模型库 |
+| `/model <name>`、`/model set <name>` | 切换模型并重启 worker |
 | `/doctor` | 快速显示 API 和桥接状态 |
 | `/clear` | 清屏 |
 | `/exit`、`/quit` | 退出 CLI |
 
 未被 CLI 本地处理的 slash command 会原样发送给 VM worker。
 
-## 9. VM worker 命令
+## 10. VM worker 命令
 
 | 命令 | 功能 |
 | --- | --- |
@@ -252,7 +304,7 @@ vm-agent artifact sentaurus-run-id plots\idvg.png --output .\idvg.png
 
 普通自然语言中的“状态”“仿真”等词不会触发这些命令；必须以 slash command 开头。
 
-## 10. Completion
+## 11. Completion
 
 当前 PowerShell 会话启用补全：
 
@@ -268,7 +320,7 @@ source <(sentaurus-vm completion zsh)
 sentaurus-vm completion fish | source
 ```
 
-## 11. 全局选项
+## 12. 全局选项
 
 | 选项 | 说明 |
 | --- | --- |
@@ -293,7 +345,7 @@ sentaurus-vm completion fish | source
 | `--no-history` | 交互启动时不显示历史 |
 | `--json` | JSON 或单轮 JSONL |
 
-## 12. Codex CLI 功能移植对照
+## 13. Codex CLI 功能移植对照
 
 | Codex 0.144.3 能力 | VM Agent CLI 状态 | 处理方式 |
 | --- | --- | --- |
@@ -317,18 +369,20 @@ sentaurus-vm completion fish | source
 | `apply` | 不适用 | Codex 用于应用代码 diff；VM Agent 已有文件/artifact 下载 |
 | Codex Cloud | 不适用 | 当前任务在用户自己的 Windows/CentOS 链路执行 |
 | MCP、plugin、app-server、remote-control | 未移植 | 当前扩展边界是 VM safe skills 和 allowlisted runner |
-| model/OSS/provider/profile | 未移植 | 模型由 VM worker 配置，API 没有安全的每轮覆盖协议 |
+| model 选择 | 已领域化移植 | 五模型白名单、固定 max、按模型族设置 272k/353k，并持久化到 VM |
+| OSS/provider/profile | 未移植 | VM 使用固定 Responses 网关和 VM 内凭据，不开放任意 provider 注入 |
 | sandbox/approval policy | 不直接移植 | VM 端固定 allowlist 比客户端可选任意 shell 更严格 |
 | `--add-dir` | 不适用 | CLI 只读取用户显式传入的附件，不扫描可写工作区 |
 | `--output-schema` | 未移植 | 后端没有结构化输出/schema 强制协议，不能假保证 |
 | web search/browser/image generation | 未移植 | 与离线/受控 Sentaurus 执行边界无关 |
 
-## 13. 安全边界
+## 14. 安全边界
 
 - `vm-agent` 不把服务端 token 写入参数、用户配置或 stdout。
 - Web API 默认只监听 `[::1]:5175`；外部入口是 OpenSSH 22。
 - VM SSH 私钥只留在 Windows 主机，模型凭据只留在 CentOS 7。
 - CLI 不提供任意 shell；实际 Sentaurus 作业仍受 VM allowlist 和 run request schema 约束。
+- 模型切换只接受固定五模型白名单，VM 配置通过原子写入更新，不允许用户提供任意 API 地址或命令。
 - JSON/JSONL、`doctor` 和 `config` 都不会输出完整 token。
 - 公网直接访问 HTTP API 会明文传 bearer token；需要远程 API 时应使用 TLS 或 SSH tunnel。
 

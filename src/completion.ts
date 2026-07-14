@@ -1,7 +1,8 @@
 const commands = [
   "chat", "exec", "review", "resume", "new", "sessions", "history", "rename",
   "archive", "unarchive", "delete", "files", "download", "artifact", "status",
-  "connect", "doctor", "features", "completion", "login", "logout", "config", "local"
+  "connect", "doctor", "model", "models", "features", "completion", "login", "logout", "config", "local",
+  "gpt-5.4", "gpt-5.5", "gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"
 ];
 
 const options = [

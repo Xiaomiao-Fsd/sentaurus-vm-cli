@@ -21,12 +21,13 @@ import { cliFeatures, formatFeatureList } from "./features.js";
 import { bootstrapLocalHost } from "./host.js";
 import { shouldReadStdin } from "./input.js";
 import { mergeMessages } from "./messages.js";
+import { parseVmAgentModel } from "./models.js";
 import { askLine, askSecret } from "./prompt.js";
 import { buildReviewPrompt } from "./review.js";
 import type { RunSummary, VmSessionOutputCategory } from "./types.js";
-import { printError, printFiles, printHistory, printRuns, statusLine, style } from "./ui.js";
+import { printError, printFiles, printHistory, printModelCatalog, printRuns, statusLine, style } from "./ui.js";
 
-const VERSION = "0.3.0";
+const VERSION = "0.4.0";
 const categories = new Set<VmSessionOutputCategory>([
   "我的输入",
   "仿真结果文件",
@@ -38,7 +39,7 @@ const categories = new Set<VmSessionOutputCategory>([
 const knownCommands = new Set([
   "chat", "ask", "exec", "review", "resume", "status", "connect", "doctor", "new",
   "sessions", "history", "rename", "archive", "unarchive", "delete", "files", "download",
-  "artifact", "features", "completion", "login", "logout", "config", "help"
+  "artifact", "model", "models", "features", "completion", "login", "logout", "config", "help"
 ]);
 
 function help(): string {
@@ -64,6 +65,8 @@ Usage:
   sentaurus-vm status [--json]          Show VM worker status
   sentaurus-vm connect [--json]         Deploy/restart the VM worker over SSH
   sentaurus-vm doctor [--json]          Check HTTP, auth, SSH, worker, and tools
+  sentaurus-vm models [--json]          List the allowlisted VM models
+  sentaurus-vm model [name]             Show or switch the active VM model
   sentaurus-vm features [--json]        List supported CLI/host/worker features
   sentaurus-vm completion [shell]       Generate shell completion
   sentaurus-vm login | logout           Manage remote API credentials
@@ -357,6 +360,22 @@ export async function runCli(argv = process.argv.slice(2)): Promise<void> {
       : await api.connect(AbortSignal.timeout(120_000));
     process.stdout.write(json ? `${JSON.stringify(result, null, 2)}\n` : `${statusLine(result.status)}\n`);
     if (!result.ok) process.exitCode = 1;
+    return;
+  }
+
+  if (command === "model" || command === "models") {
+    const action = args[0]?.toLowerCase();
+    const listOnly = command === "models" || !action || action === "list" || action === "status" || action === "current";
+    if (listOnly) {
+      const result = await api.models(AbortSignal.timeout(45_000));
+      process.stdout.write(json ? `${JSON.stringify(result, null, 2)}\n` : "");
+      if (!json) printModelCatalog(result);
+      return;
+    }
+    const model = parseVmAgentModel(action === "set" ? args[1] : args[0]);
+    const result = await api.setModel(model, AbortSignal.timeout(180_000));
+    process.stdout.write(json ? `${JSON.stringify(result, null, 2)}\n` : "");
+    if (!json) printModelCatalog(result);
     return;
   }
 

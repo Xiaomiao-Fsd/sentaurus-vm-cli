@@ -14,6 +14,7 @@ export const cliFeatures: CliFeature[] = [
   { name: "sentaurus_review", stage: "stable", source: "cli", description: "Findings-first review of decks, scripts, logs, and results" },
   { name: "attachments_and_images", stage: "stable", source: "cli", description: "Upload local files and images into a VM session" },
   { name: "shell_completion", stage: "stable", source: "cli", description: "Generate PowerShell, Bash, Zsh, and Fish completions" },
+  { name: "model_switching", stage: "stable", source: "worker", description: "Allowlisted VM model switching with max reasoning and family context limits" },
   { name: "host_bootstrap", stage: "stable", source: "host", description: "Start loopback Web API and wake the CentOS worker without exposing the token" },
   { name: "sse_streaming", stage: "stable", source: "host", description: "Incremental replies and structured worklog progress" },
   { name: "durable_goals", stage: "stable", source: "worker", description: "Session-scoped /goal state" },

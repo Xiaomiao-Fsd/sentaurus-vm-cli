@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { belongsToTurn, isFinalReply, mergeMessages } from "../src/messages.js";
 import type { VmAgentMessage } from "../src/types.js";
-import { JsonlTurnRenderer, TurnRenderer } from "../src/ui.js";
+import { JsonlTurnRenderer, statusLine, TurnRenderer } from "../src/ui.js";
 
 function message(id: string, content: string, meta: VmAgentMessage["meta"]): VmAgentMessage {
   return { id, role: "agent", content, createdAt: "2026-07-14T00:00:00Z", meta };
@@ -49,4 +49,18 @@ test("JsonlTurnRenderer emits a machine-readable final response", () => {
   assert.equal(events.at(-1)?.type, "turn.completed");
   assert.equal(events.at(-1)?.finalResponse, "ready");
   assert.equal(renderer.finalMessage()?.content, "ready");
+});
+
+test("statusLine includes reasoning and the effective context window", () => {
+  assert.match(statusLine({
+    ok: true,
+    checkedAt: "now",
+    sshTarget: "vm",
+    connected: true,
+    workerRunning: true,
+    llmConfigured: true,
+    llmModel: "gpt-5.6-sol",
+    llmReasoningEffort: "max",
+    llmContextWindowTokens: 353000
+  }), /gpt-5\.6-sol max \| context 353k/);
 });

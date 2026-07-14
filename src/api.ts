@@ -9,6 +9,8 @@ import type {
   VmAgentHistoryResponse,
   VmAgentMessageAttachment,
   VmAgentMessageResponse,
+  VmAgentModelId,
+  VmAgentModelsResponse,
   VmAgentStatus,
   VmHostStatus,
   VmSessionFilesResponse,
@@ -115,6 +117,18 @@ export class SentaurusApi {
 
   connect(signal?: AbortSignal): Promise<VmAgentConnectResponse> {
     return this.json("/api/vm/agent/connect", { method: "POST", body: "{}", ...withSignal(signal) });
+  }
+
+  models(signal?: AbortSignal): Promise<VmAgentModelsResponse> {
+    return this.json("/api/vm/agent/models", withSignal(signal));
+  }
+
+  setModel(model: VmAgentModelId, signal?: AbortSignal): Promise<VmAgentModelsResponse> {
+    return this.json("/api/vm/agent/model", {
+      method: "PUT",
+      body: JSON.stringify({ model }),
+      ...withSignal(signal)
+    });
   }
 
   async listRuns(signal?: AbortSignal): Promise<RunSummary[]> {

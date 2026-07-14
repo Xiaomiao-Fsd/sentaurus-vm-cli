@@ -14,12 +14,14 @@ import type {
   VmSessionOutputFile
 } from "./types.js";
 import { messageTurnId, mergeMessages } from "./messages.js";
+import { parseVmAgentModel } from "./models.js";
 import {
   JsonlTurnRenderer,
   printBanner,
   printError,
   printFiles,
   printHistory,
+  printModelCatalog,
   printRuns,
   type ReplyRenderer,
   shortId,
@@ -268,6 +270,7 @@ Local commands:
   /download <number|path> [out] Download a listed session file
   /artifact <run-id> <path> [out] Download a run artifact
   /connect                      Deploy/restart the VM worker over SSH
+  /model [list|set <name>|name] Show or switch the allowlisted VM model
   /doctor                       Show API and VM bridge status
   /clear                        Clear the terminal
   /exit                         Exit the CLI
@@ -487,6 +490,18 @@ export async function interactiveChat(
           const connected = await api.connect();
           status = connected.status;
           process.stdout.write(`${statusLine(status)}\n`);
+          continue;
+        }
+        if (command === "/model" || command === "/models") {
+          const action = parts[1]?.toLowerCase();
+          if (!action || action === "list" || action === "status" || action === "current") {
+            printModelCatalog(await api.models());
+            continue;
+          }
+          const selected = parseVmAgentModel(action === "set" ? parts[2] : parts[1]);
+          const changed = await api.setModel(selected, AbortSignal.timeout(180_000));
+          status = changed.status;
+          printModelCatalog(changed);
           continue;
         }
         if (command === "/doctor") {

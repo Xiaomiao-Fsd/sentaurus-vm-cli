@@ -67,3 +67,26 @@ test("API client renames and deletes runs", async () => {
   assert.equal(seen[0]?.init?.body, JSON.stringify({ title: "renamed" }));
   assert.equal(seen[1]?.init?.method, "DELETE");
 });
+
+test("API client lists and switches allowlisted VM models", async () => {
+  const seen: SeenRequest[] = [];
+  const response = {
+    ok: true,
+    currentModel: "gpt-5.6-sol",
+    activeModels: ["gpt-5.6-sol"],
+    reasoningEffort: "max",
+    contextWindowTokens: 353000,
+    models: [{ id: "gpt-5.6-sol", contextWindowTokens: 353000 }],
+    status: { ok: true, checkedAt: "now", sshTarget: "vm", connected: true, llmModel: "gpt-5.6-sol" }
+  };
+  const mockFetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    seen.push({ url: String(input), ...(init ? { init } : {}) });
+    return Response.json(response);
+  }) as typeof fetch;
+  const api = new SentaurusApi({ baseUrl: "http://localhost:5175", token: "token", fetchImpl: mockFetch });
+  assert.equal((await api.models()).currentModel, "gpt-5.6-sol");
+  assert.equal((await api.setModel("gpt-5.6-sol")).reasoningEffort, "max");
+  assert.match(seen[0]?.url || "", /\/api\/vm\/agent\/models$/);
+  assert.equal(seen[1]?.init?.method, "PUT");
+  assert.equal(seen[1]?.init?.body, JSON.stringify({ model: "gpt-5.6-sol" }));
+});

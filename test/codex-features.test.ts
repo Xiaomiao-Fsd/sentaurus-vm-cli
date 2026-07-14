@@ -3,6 +3,7 @@ import test from "node:test";
 import { completionScript } from "../src/completion.js";
 import { cliFeatures, formatFeatureList } from "../src/features.js";
 import { shouldReadStdin } from "../src/input.js";
+import { parseVmAgentModel, VM_AGENT_MODEL_IDS } from "../src/models.js";
 import { buildReviewPrompt } from "../src/review.js";
 
 test("completion generators cover the installed command aliases", () => {
@@ -12,6 +13,7 @@ test("completion generators cover the installed command aliases", () => {
     assert.match(script, /vm-agent/);
     assert.match(script, /exec/);
     assert.match(script, /--session/);
+    assert.match(script, /gpt-5\.6-sol/);
   }
   assert.throws(() => completionScript("cmd"), /Unsupported shell/);
 });
@@ -19,6 +21,7 @@ test("completion generators cover the installed command aliases", () => {
 test("feature list exposes migrated Codex-style capabilities", () => {
   assert.ok(cliFeatures.some((feature) => feature.name === "non_interactive_exec"));
   assert.ok(cliFeatures.some((feature) => feature.name === "session_lifecycle"));
+  assert.ok(cliFeatures.some((feature) => feature.name === "model_switching"));
   assert.match(formatFeatureList(), /jsonl_events/);
 });
 
@@ -34,4 +37,10 @@ test("stdin detection does not hang an SSH command that already has a prompt", (
   assert.equal(shouldReadStdin(["explain", "-"], false), true);
   assert.equal(shouldReadStdin([], false), true);
   assert.equal(shouldReadStdin([], true), false);
+});
+
+test("client model selector exposes only the five configured models", () => {
+  assert.deepEqual(VM_AGENT_MODEL_IDS, ["gpt-5.4", "gpt-5.5", "gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"]);
+  assert.equal(parseVmAgentModel("gpt-5.6-sol"), "gpt-5.6-sol");
+  assert.throws(() => parseVmAgentModel("gpt-5.6-unknown"), /Model must be one of/);
 });

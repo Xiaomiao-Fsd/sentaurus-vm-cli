@@ -5,6 +5,8 @@ or simulation inputs/results that are not intended for publication.
 
 The CLI intentionally has no arbitrary shell or SSH execution command. It calls the authenticated
 Sentaurus Web Agent API, which in turn uses its fixed SSH bridge and the VM worker allowlist.
+Model updates are also allowlisted: only the five compiled model IDs are accepted, and the VM `.env`
+is updated atomically without returning its API base or key.
 
 In the recommended `vm-agent` host-local mode, users authenticate to Windows with OpenSSH. The CLI
 then reads the API token from the host-local Web Agent `.env`; the token is not copied to the remote

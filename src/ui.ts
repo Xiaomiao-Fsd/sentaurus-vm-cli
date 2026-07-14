@@ -1,5 +1,5 @@
 import process from "node:process";
-import type { RunSummary, VmAgentMessage, VmAgentStatus, VmSessionOutputFile } from "./types.js";
+import type { RunSummary, VmAgentMessage, VmAgentModelsResponse, VmAgentStatus, VmSessionOutputFile } from "./types.js";
 import {
   belongsToTurn,
   isFinalReply,
@@ -39,7 +39,17 @@ export function statusLine(status: VmAgentStatus): string {
   const connection = status.connected ? style.green("connected") : style.red("disconnected");
   const worker = status.workerRunning ? style.green("worker running") : style.yellow("worker stopped");
   const model = status.llmConfigured ? status.llmModel || "configured" : style.yellow("LLM not configured");
-  return `${connection} | ${worker} | ${model} | queue ${status.queueDepth ?? "?"}`;
+  const reasoning = status.llmReasoningEffort ? ` ${status.llmReasoningEffort}` : "";
+  const context = status.llmContextWindowTokens ? ` | context ${Math.round(status.llmContextWindowTokens / 1000)}k` : "";
+  return `${connection} | ${worker} | ${model}${reasoning}${context} | queue ${status.queueDepth ?? "?"}`;
+}
+
+export function printModelCatalog(response: VmAgentModelsResponse): void {
+  process.stdout.write(`Current  ${response.currentModel} | reasoning ${response.reasoningEffort} | context ${Math.round(response.contextWindowTokens / 1000)}k\n`);
+  for (const model of response.models) {
+    const current = model.id === response.currentModel ? "*" : " ";
+    process.stdout.write(`${current} ${model.id.padEnd(16)} ${Math.round(model.contextWindowTokens / 1000)}k\n`);
+  }
 }
 
 export function printBanner(apiUrl: string, session: RunSummary, status: VmAgentStatus): void {
