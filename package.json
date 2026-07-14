@@ -1,11 +1,13 @@
 {
   "name": "sentaurus-vm-cli",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "Codex-style terminal client for the Sentaurus VM Agent SSH bridge",
   "type": "module",
   "bin": {
-    "sentaurus-vm": "dist/index.js",
-    "svm": "dist/index.js"
+    "sentaurus-vm": "dist/sentaurus-vm.js",
+    "svm": "dist/sentaurus-vm.js",
+    "vm-agent": "dist/vm-agent.js",
+    "sentaurus-vm-ssh": "dist/vm-agent.js"
   },
   "files": [
     "dist",

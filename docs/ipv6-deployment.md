@@ -3,6 +3,16 @@
 本文针对 `sentaurus-web-agent` 运行在 Windows、CentOS 7 Sentaurus 运行在 VMware VM
 中的部署。命令需要在 Web 服务仓库或管理员 PowerShell 中执行。
 
+先在 CLI 仓库的管理员 PowerShell 中配置 SSH PowerShell 入口和固定命令：
+
+```powershell
+npm link
+.\scripts\install-ssh-entry.ps1
+```
+
+该脚本把 Windows OpenSSH 默认 shell 设置为 PowerShell，并让管理员账号同时读取
+`C:\ProgramData\ssh\administrators_authorized_keys` 与用户自己的 `.ssh\authorized_keys`。
+
 ## 1. 验证主机到 VM 的 SSH
 
 Windows OpenSSH 配置应包含：
@@ -20,19 +30,19 @@ Host sentaurus-centos7
 ssh -o BatchMode=yes sentaurus-centos7 "hostname; whoami; command -v sde; command -v sdevice"
 ```
 
-## 2. 让 Fastify 监听 IPv6
+## 2. SSH-only 的 Fastify 监听
 
 编辑 `sentaurus-web-agent/.env`，保留已有 token，不要把真实值写入 Git：
 
 ```env
-HOST=::
+HOST=::1
 PORT=5175
 AUTH_TOKEN=<at-least-24-random-characters>
 SENTAURUS_SSH_TARGET=sentaurus-centos7
 ```
 
-CLI 不受 CORS 限制。若还要从 IPv6 地址打开 Web UI，应把 `CORS_ORIGIN` 设置成实际
-Web UI origin，例如 `http://[<host-ipv6>]:5174`。
+外部用户先通过 SSH 登录 Windows，再在主机 PowerShell 内运行 `vm-agent`。API 只监听
+loopback，`AUTH_TOKEN` 仍保留但由本地主机模式自动读取。
 
 启动并检查监听地址：
 
@@ -42,7 +52,7 @@ Get-NetTCPConnection -State Listen -LocalPort 5175
 Invoke-RestMethod 'http://[::1]:5175/api/health'
 ```
 
-预期监听地址是 `::`，健康检查返回 `ok: true`。
+预期监听地址是 `::1`，健康检查返回 `ok: true`。
 
 长期运行时不要依赖临时终端中的后台子进程。CLI 仓库包含一个系统启动触发并在异常退出后
 重启的 Windows S4U 计划任务安装脚本；在管理员 PowerShell 中执行：
@@ -73,35 +83,32 @@ Get-NetIPAddress -AddressFamily IPv6 |
 
 ## 4. Windows 防火墙
 
-直接开放 API 端口时，在管理员 PowerShell 中执行：
+SSH-only 模式不开放 5175。安装脚本默认会禁用已有 API 入站规则：
 
 ```powershell
-New-NetFirewallRule -DisplayName 'Sentaurus VM Agent API 5175' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 5175 -Profile Any
+.\scripts\install-windows-server-task.ps1
 ```
 
-若只使用 SSH tunnel，不需要开放 5175；只需保证 Windows OpenSSH 的 22 端口能从外部
-IPv6 访问。长期部署建议删除宽泛的 5175 规则或用 `-RemoteAddress` 限制来源。
+只需保证 Windows OpenSSH 的 22 端口能从外部 IPv6 访问。仅在已经配置 TLS、明确需要
+远程 API 时使用 `.\scripts\install-windows-server-task.ps1 -PublicApi`。
 
 ## 5. 外部验收
 
 在另一条网络、另一台有 IPv6 的机器上执行：
 
 ```powershell
-curl.exe -g "http://[<host-ipv6>]:5175/api/health"
-
-$env:SENTAURUS_VM_URL = 'http://[<host-ipv6>]:5175'
-$env:SENTAURUS_VM_TOKEN = '<AUTH_TOKEN>'
-sentaurus-vm doctor --json
-sentaurus-vm connect --json
-sentaurus-vm chat '/status'
+ssh -6 -l sshdev <host-ipv6>
+# 登录后的 Windows PowerShell：
+vm-agent /status
+vm-agent
 ```
 
-`doctor` 成功需要同时证明：HTTP 健康、token 认证、Windows 到 VM 的 SSH、worker 运行，
-以及 Sentaurus tools 可发现。仅本机访问 `[::1]` 不能证明公网入站有效。
+该验证同时覆盖：公网 IPv6 SSH、Windows PowerShell、loopback API、主机到 VM 的 SSH、
+worker 启动和消息回复。
 
-## 6. 推荐的 SSH tunnel
+## 6. 可选的 SSH tunnel
 
-公网不应长期传输明文 bearer token。外部机器执行：
+`vm-agent` 是推荐方式，不需要 tunnel。若外部脚本必须直接调用 API，可在 SSH 中转发：
 
 ```powershell
 ssh -N -L 5175:127.0.0.1:5175 <windows-user>@<host-ipv6>
@@ -111,7 +118,7 @@ ssh -N -L 5175:127.0.0.1:5175 <windows-user>@<host-ipv6>
 
 ```powershell
 $env:SENTAURUS_VM_URL = 'http://127.0.0.1:5175'
-$env:SENTAURUS_VM_TOKEN = '<AUTH_TOKEN>'
+$env:SENTAURUS_VM_TOKEN = '<从主机安全取得的 AUTH_TOKEN>'
 sentaurus-vm doctor
 ```
 
@@ -120,8 +127,8 @@ sentaurus-vm doctor
 
 ## 7. 故障定位
 
-- `health` 失败：检查 Node 进程、`HOST=::` 和 5175 监听。
-- 本机 IPv6 成功、外部失败：检查 Windows 防火墙、路由器 IPv6 入站策略和运营商过滤。
+- `health` 失败：检查计划任务、Node 进程、`HOST=::1` 和 5175 loopback 监听。
+- 外部 SSH 失败：检查 sshd、TCP 22 防火墙、IPv6 地址和用户公钥。
 - HTTP 401：CLI token 与服务端 `AUTH_TOKEN` 不一致。
 - `connected=false`：在 Windows 主机直接执行 `ssh sentaurus-centos7`，检查 alias/key/VM IP。
 - `workerRunning=false`：执行 `sentaurus-vm connect`，再看 status 中的错误。

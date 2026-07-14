@@ -1,9 +1,9 @@
-import { access } from "node:fs/promises";
+import { access, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import process from "node:process";
 import { SentaurusApi } from "./api.js";
-import { updateStoredConfig } from "./config.js";
+import { loadStoredConfig, updateStoredConfig } from "./config.js";
 import type {
   RunSummary,
   VmAgentAttachmentRef,
@@ -14,7 +14,19 @@ import type {
   VmSessionOutputFile
 } from "./types.js";
 import { messageTurnId, mergeMessages } from "./messages.js";
-import { printBanner, printError, printFiles, printHistory, printRuns, shortId, statusLine, style, TurnRenderer } from "./ui.js";
+import {
+  JsonlTurnRenderer,
+  printBanner,
+  printError,
+  printFiles,
+  printHistory,
+  printRuns,
+  type ReplyRenderer,
+  shortId,
+  statusLine,
+  style,
+  TurnRenderer
+} from "./ui.js";
 
 export type ChatOptions = {
   configPath: string;
@@ -23,6 +35,16 @@ export type ChatOptions = {
   timeoutMs?: number;
   showHistory?: boolean;
   attachments?: string[];
+  cwd?: string;
+  outputMode?: "human" | "jsonl";
+  outputLastMessage?: string;
+  archivedSessionIds?: string[];
+  initialStatus?: VmAgentStatus;
+};
+
+export type OneShotChatResult = {
+  session: RunSummary;
+  finalMessage?: VmAgentMessage;
 };
 
 type PendingAttachment = {
@@ -74,10 +96,16 @@ export function splitCommandLine(value: string): string[] {
   return result;
 }
 
-function findRun(runs: RunSummary[], selector: string): RunSummary {
+export function findRun(runs: RunSummary[], selector: string): RunSummary {
   const exact = runs.find((run) => run.id === selector);
   if (exact) return exact;
-  const matches = runs.filter((run) => run.id.startsWith(selector));
+  const normalized = selector.toLocaleLowerCase();
+  const exactTitle = runs.filter((run) => run.title.toLocaleLowerCase() === normalized);
+  if (exactTitle.length === 1 && exactTitle[0]) return exactTitle[0];
+  if (exactTitle.length > 1) throw new Error(`Session title is ambiguous: ${selector}`);
+  const matches = runs.filter((run) =>
+    run.id.startsWith(selector) || run.title.toLocaleLowerCase().startsWith(normalized)
+  );
   if (matches.length === 1 && matches[0]) return matches[0];
   if (matches.length > 1) throw new Error(`Session prefix is ambiguous: ${selector}`);
   throw new Error(`Session not found: ${selector}`);
@@ -87,15 +115,18 @@ export async function resolveSession(
   api: SentaurusApi,
   selector?: string,
   fallbackId?: string,
-  title?: string
+  title?: string,
+  archivedSessionIds: string[] = []
 ): Promise<RunSummary> {
   const runs = await api.listRuns();
   if (selector) return findRun(runs, selector);
-  if (fallbackId) {
-    const existing = runs.find((run) => run.id === fallbackId);
+  const archived = new Set(archivedSessionIds);
+  const activeRuns = runs.filter((run) => !archived.has(run.id));
+  if (fallbackId && !archived.has(fallbackId)) {
+    const existing = activeRuns.find((run) => run.id === fallbackId);
     if (existing) return existing;
   }
-  if (runs[0]) return runs[0];
+  if (activeRuns[0]) return activeRuns[0];
   return api.createRun(title || `CLI session ${new Date().toISOString()}`);
 }
 
@@ -109,7 +140,7 @@ async function pollForReply(
   cursor: number,
   sessionId: string,
   turnId: string | undefined,
-  renderer: TurnRenderer,
+  renderer: ReplyRenderer,
   signal: AbortSignal
 ): Promise<void> {
   let nextCursor = cursor;
@@ -125,11 +156,11 @@ export async function waitForReply(
   api: SentaurusApi,
   initial: VmAgentHistoryResponse,
   sessionId: string,
-  renderer: TurnRenderer,
+  renderer: ReplyRenderer,
   options: { timeoutMs: number; signal?: AbortSignal }
-): Promise<void> {
+): Promise<VmAgentMessage | undefined> {
   const turnId = turnIdFrom(initial.messages, sessionId);
-  if (renderer.render(initial.messages, sessionId, turnId)) return;
+  if (renderer.render(initial.messages, sessionId, turnId)) return renderer.finalMessage();
 
   const streamController = new AbortController();
   const timeoutController = new AbortController();
@@ -159,15 +190,16 @@ export async function waitForReply(
         }
       }, signal);
     } catch (error) {
-      if (complete) return;
+      if (complete) return renderer.finalMessage();
       if (options.signal?.aborted) throw options.signal.reason || error;
       if (timeoutController.signal.aborted) throw timeoutController.signal.reason || error;
       if (!streamController.signal.aborted && error instanceof Error) streamFailure = error;
     }
-    if (complete) return;
-    if (streamFailure) process.stdout.write(`${style.dim(`Streaming unavailable (${streamFailure.message}); polling instead.`)}\n`);
+    if (complete) return renderer.finalMessage();
+    if (streamFailure) process.stderr.write(`${style.dim(`Streaming unavailable (${streamFailure.message}); polling instead.`)}\n`);
     const pollSignals = options.signal ? [timeoutController.signal, options.signal] : [timeoutController.signal];
     await pollForReply(api, cursor, sessionId, turnId, renderer, AbortSignal.any(pollSignals));
+    return renderer.finalMessage();
   } finally {
     clearTimeout(timeout);
     streamController.abort();
@@ -180,8 +212,9 @@ export async function sendTurn(
   text: string,
   pending: PendingAttachment[],
   timeoutMs: number,
-  signal?: AbortSignal
-): Promise<void> {
+  signal?: AbortSignal,
+  renderer: ReplyRenderer = new TurnRenderer()
+): Promise<VmAgentMessage | undefined> {
   const names = pending.map((item) => item.ref.name);
   const attachmentLine = names.length ? `\n\nAttachments available to the VM agent: ${names.join(", ")}.` : "";
   const visibleText = text.trim() || `Attached ${names.length} file${names.length === 1 ? "" : "s"}.`;
@@ -192,19 +225,28 @@ export async function sendTurn(
     pending.map((item) => item.display),
     signal
   );
-  await waitForReply(api, response, sessionId, new TurnRenderer(), { timeoutMs, ...(signal ? { signal } : {}) });
+  return await waitForReply(api, response, sessionId, renderer, { timeoutMs, ...(signal ? { signal } : {}) });
 }
 
-async function uploadAttachments(api: SentaurusApi, sessionId: string, paths: string[]): Promise<PendingAttachment[]> {
+async function uploadAttachments(
+  api: SentaurusApi,
+  sessionId: string,
+  paths: string[],
+  options: { cwd?: string; outputMode?: "human" | "jsonl" } = {}
+): Promise<PendingAttachment[]> {
   const result: PendingAttachment[] = [];
   for (const localPath of paths) {
-    const resolved = path.resolve(localPath);
+    const resolved = path.resolve(options.cwd || process.cwd(), localPath);
     await access(resolved);
-    process.stdout.write(`${style.dim(`Uploading ${resolved}...`)}\n`);
+    if (options.outputMode !== "jsonl") process.stdout.write(`${style.dim(`Uploading ${resolved}...`)}\n`);
     const uploaded = await api.uploadFile(sessionId, resolved);
     result.push({ ref: uploaded.ref, display: uploaded.display });
     const sync = uploaded.response.vmSync.ok ? "VM synced" : "inline fallback";
-    process.stdout.write(`${style.green("attached")} ${uploaded.ref.name} (${sync})\n`);
+    if (options.outputMode === "jsonl") {
+      process.stdout.write(`${JSON.stringify({ type: "attachment.completed", sessionId, attachment: uploaded.ref, sync })}\n`);
+    } else {
+      process.stdout.write(`${style.green("attached")} ${uploaded.ref.name} (${sync})\n`);
+    }
   }
   return result;
 }
@@ -213,8 +255,10 @@ function printLocalHelp(): void {
   process.stdout.write(`
 Local commands:
   /new [title]                  Create and switch to a session
-  /resume <id-prefix>           Switch to an existing session
-  /sessions                     List sessions
+  /resume <id-prefix|title>     Switch to an existing session
+  /rename <title>               Rename the current session
+  /archive                      Archive the current session locally
+  /sessions [--all]             List active or all sessions
   /session                      Show the current session
   /history                      Reload recent conversation
   /attach <path> [...]          Upload files for the next message
@@ -251,14 +295,40 @@ export async function oneShotChat(
   message: string,
   options: ChatOptions,
   fallbackSessionId?: string
-): Promise<RunSummary> {
-  const session = await resolveSession(api, options.sessionId, fallbackSessionId, options.title);
+): Promise<OneShotChatResult> {
+  const session = await resolveSession(
+    api,
+    options.sessionId,
+    fallbackSessionId,
+    options.title,
+    options.archivedSessionIds
+  );
   await updateStoredConfig({ lastSessionId: session.id }, options.configPath);
-  const status = await api.status();
-  printBanner(api.baseUrl, session, status);
-  const pending = await uploadAttachments(api, session.id, options.attachments || []);
-  await sendTurn(api, session.id, message, pending, options.timeoutMs || 30 * 60_000);
-  return session;
+  const status = options.initialStatus || await api.status();
+  if (options.outputMode === "jsonl") {
+    process.stdout.write(`${JSON.stringify({ type: "session.started", session, status })}\n`);
+  } else {
+    printBanner(api.baseUrl, session, status);
+  }
+  const pending = await uploadAttachments(api, session.id, options.attachments || [], options);
+  if (options.outputMode === "jsonl") {
+    process.stdout.write(`${JSON.stringify({ type: "turn.started", sessionId: session.id })}\n`);
+  }
+  const renderer = options.outputMode === "jsonl" ? new JsonlTurnRenderer() : new TurnRenderer();
+  const finalMessage = await sendTurn(
+    api,
+    session.id,
+    message,
+    pending,
+    options.timeoutMs || 30 * 60_000,
+    undefined,
+    renderer
+  );
+  if (options.outputLastMessage) {
+    const destination = path.resolve(options.cwd || process.cwd(), options.outputLastMessage);
+    await writeFile(destination, finalMessage?.content || "", "utf8");
+  }
+  return { session, ...(finalMessage ? { finalMessage } : {}) };
 }
 
 export async function interactiveChat(
@@ -266,11 +336,17 @@ export async function interactiveChat(
   options: ChatOptions,
   fallbackSessionId?: string
 ): Promise<void> {
-  let session = await resolveSession(api, options.sessionId, fallbackSessionId, options.title);
+  let session = await resolveSession(
+    api,
+    options.sessionId,
+    fallbackSessionId,
+    options.title,
+    options.archivedSessionIds
+  );
   await updateStoredConfig({ lastSessionId: session.id }, options.configPath);
-  let status = await api.status();
+  let status = options.initialStatus || await api.status();
   let files: VmSessionOutputFile[] = [];
-  let pending = await uploadAttachments(api, session.id, options.attachments || []);
+  let pending = await uploadAttachments(api, session.id, options.attachments || [], options);
   printBanner(api.baseUrl, session, status);
 
   if (options.showHistory !== false) {
@@ -319,7 +395,9 @@ export async function interactiveChat(
           continue;
         }
         if (command === "/sessions") {
-          printRuns(await api.listRuns(), session.id);
+          const archived = new Set((await loadStoredConfig(options.configPath)).archivedSessionIds || []);
+          const runs = await api.listRuns();
+          printRuns(parts[1] === "--all" ? runs : runs.filter((run) => !archived.has(run.id)), session.id, archived);
           continue;
         }
         if (command === "/new") {
@@ -341,6 +419,25 @@ export async function interactiveChat(
           printHistory(mergeMessages([], history.messages));
           continue;
         }
+        if (command === "/rename") {
+          const title = parts.slice(1).join(" ").trim();
+          if (!title) throw new Error("Usage: /rename <title>");
+          session = await api.updateRunTitle(session.id, title);
+          process.stdout.write(`${style.green("renamed")} ${session.id}  ${session.title}\n`);
+          continue;
+        }
+        if (command === "/archive") {
+          const stored = await loadStoredConfig(options.configPath);
+          const archived = [...new Set([...(stored.archivedSessionIds || []), session.id])];
+          await updateStoredConfig({ archivedSessionIds: archived }, options.configPath);
+          const next = (await api.listRuns()).find((run) => !archived.includes(run.id));
+          session = next || await api.createRun(`CLI session ${new Date().toISOString()}`);
+          pending = [];
+          files = [];
+          await updateStoredConfig({ lastSessionId: session.id }, options.configPath);
+          process.stdout.write(`${style.green("archived")} switched to ${session.id}\n`);
+          continue;
+        }
         if (command === "/history") {
           const history = await api.messages(0, { limit: 200, sessionId: session.id });
           printHistory(mergeMessages([], history.messages), 30);
@@ -348,7 +445,7 @@ export async function interactiveChat(
         }
         if (command === "/attach") {
           if (parts.length < 2) throw new Error("Usage: /attach <path> [...]");
-          pending.push(...await uploadAttachments(api, session.id, parts.slice(1)));
+          pending.push(...await uploadAttachments(api, session.id, parts.slice(1), options));
           continue;
         }
         if (command === "/attachments") {

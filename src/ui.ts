@@ -7,7 +7,9 @@ import {
   isStreamDone,
   isStreamingDraft,
   isWorklogMessage,
+  mergeMessages,
   messageKind,
+  messageTurnId,
   streamTargetId
 } from "./messages.js";
 
@@ -48,14 +50,15 @@ export function printBanner(apiUrl: string, session: RunSummary, status: VmAgent
   process.stdout.write(`${style.dim("Hint")}     /help shows local commands; VM commands such as /goal and /side pass through.\n\n`);
 }
 
-export function printRuns(runs: RunSummary[], currentId?: string): void {
+export function printRuns(runs: RunSummary[], currentId?: string, archivedIds: ReadonlySet<string> = new Set()): void {
   if (!runs.length) {
     process.stdout.write("No sessions.\n");
     return;
   }
   for (const run of runs) {
     const current = run.id === currentId ? "*" : " ";
-    process.stdout.write(`${current} ${run.id}  ${run.status.padEnd(12)}  ${run.title}\n`);
+    const archived = archivedIds.has(run.id) ? "A" : " ";
+    process.stdout.write(`${current}${archived} ${run.id}  ${run.status.padEnd(12)}  ${run.title}\n`);
   }
 }
 
@@ -86,20 +89,27 @@ export function printHistory(messages: VmAgentMessage[], limit = 16): void {
 
 type Writer = (value: string) => void;
 
+export type ReplyRenderer = {
+  render(messages: VmAgentMessage[], sessionId: string, turnId?: string): boolean;
+  finalMessage(): VmAgentMessage | undefined;
+};
+
 export class TurnRenderer {
   private readonly seen = new Set<string>();
   private readonly streamContent = new Map<string, string>();
   private streamOpen = false;
   private readonly write: Writer;
+  private merged: VmAgentMessage[] = [];
 
   constructor(write: Writer = (value) => process.stdout.write(value)) {
     this.write = write;
   }
 
   render(messages: VmAgentMessage[], sessionId: string, turnId?: string): boolean {
+    const accepted = messages.filter((message) => belongsToTurn(message, sessionId, turnId));
+    this.merged = mergeMessages(this.merged, accepted);
     let complete = false;
-    for (const message of messages) {
-      if (!belongsToTurn(message, sessionId, turnId)) continue;
+    for (const message of accepted) {
       if (this.seen.has(message.id) && !streamTargetId(message)) continue;
       this.seen.add(message.id);
 
@@ -143,6 +153,71 @@ export class TurnRenderer {
       if (isFinalReply(message)) complete = true;
     }
     return complete;
+  }
+
+  finalMessage(): VmAgentMessage | undefined {
+    return [...this.merged].reverse().find((message) => isFinalReply(message));
+  }
+}
+
+function jsonEventType(message: VmAgentMessage): string {
+  if (message.role === "system") return "error";
+  if (isWorklogMessage(message)) return "worklog";
+  if (isStreamDelta(message) || isStreamingDraft(message)) return "response.delta";
+  if (isStreamDone(message) || isFinalReply(message)) return "response.completed";
+  return "message";
+}
+
+export class JsonlTurnRenderer implements ReplyRenderer {
+  private readonly seen = new Set<string>();
+  private readonly write: Writer;
+  private merged: VmAgentMessage[] = [];
+  private completed = false;
+
+  constructor(write: Writer = (value) => process.stdout.write(value)) {
+    this.write = write;
+  }
+
+  private event(value: unknown): void {
+    this.write(`${JSON.stringify(value)}\n`);
+  }
+
+  render(messages: VmAgentMessage[], sessionId: string, turnId?: string): boolean {
+    const accepted = messages.filter((message) => belongsToTurn(message, sessionId, turnId));
+    this.merged = mergeMessages(this.merged, accepted);
+
+    for (const message of accepted) {
+      const fingerprint = [message.id, messageKind(message), message.content, message.meta?.done, message.meta?.streamState].join("\u0000");
+      if (this.seen.has(fingerprint)) continue;
+      this.seen.add(fingerprint);
+      const target = streamTargetId(message);
+      const mergedTarget = target ? this.merged.find((item) => item.id === target) : undefined;
+      const eventMessage = isStreamDone(message) && mergedTarget ? mergedTarget : message;
+      this.event({
+        type: jsonEventType(message),
+        sessionId,
+        turnId: turnId || messageTurnId(message) || null,
+        message: eventMessage
+      });
+    }
+
+    const final = this.finalMessage();
+    const done = accepted.some((message) => isStreamDone(message) || isFinalReply(message));
+    if (done && !this.completed) {
+      this.completed = true;
+      this.event({
+        type: "turn.completed",
+        sessionId,
+        turnId: turnId || (final ? messageTurnId(final) : undefined) || null,
+        finalResponse: final?.content || "",
+        finalMessageId: final?.id || null
+      });
+    }
+    return done;
+  }
+
+  finalMessage(): VmAgentMessage | undefined {
+    return [...this.merged].reverse().find((message) => isFinalReply(message));
   }
 }
 

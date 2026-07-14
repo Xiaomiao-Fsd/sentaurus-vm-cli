@@ -3,7 +3,7 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { maskedToken, normalizeApiUrl, resolveConfig, saveStoredConfig } from "../src/config.js";
+import { loadStoredConfig, maskedToken, normalizeApiUrl, removeStoredConfigKeys, resolveConfig, saveStoredConfig } from "../src/config.js";
 
 test("normalizeApiUrl accepts bracketed IPv6 and removes a trailing slash", () => {
   assert.equal(normalizeApiUrl(" http://[2001:db8::10]:5175/ "), "http://[2001:db8::10]:5175");
@@ -23,4 +23,13 @@ test("stored config uses JSON and masks tokens", async () => {
   assert.equal(config.lastSessionId, "run_test");
   assert.equal(maskedToken(config.authToken), "1234...cdef");
   assert.match(await readFile(configPath, "utf8"), /"authToken": "1234567890abcdef"/);
+});
+
+test("stored config normalizes archives and can remove credentials", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "sentaurus-vm-cli-config-test-"));
+  const configPath = path.join(directory, "config.json");
+  await saveStoredConfig({ authToken: "secret", archivedSessionIds: ["run_a", "run_a", "run_b"] }, configPath);
+  assert.deepEqual((await loadStoredConfig(configPath)).archivedSessionIds, ["run_a", "run_b"]);
+  await removeStoredConfigKeys(["authToken"], configPath);
+  assert.equal((await loadStoredConfig(configPath)).authToken, undefined);
 });

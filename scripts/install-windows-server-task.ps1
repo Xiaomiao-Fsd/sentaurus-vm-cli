@@ -3,7 +3,8 @@
 param(
   [string]$TaskName = 'Sentaurus VM Agent IPv6 API',
   [int]$Port = 5175,
-  [string]$ServerRepository = $env:SENTAURUS_WEB_AGENT_REPO
+  [string]$ServerRepository = $env:SENTAURUS_WEB_AGENT_REPO,
+  [switch]$PublicApi
 )
 
 $ErrorActionPreference = 'Stop'
@@ -30,7 +31,7 @@ Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Pr
 
 $firewallName = "Sentaurus VM Agent API $Port"
 $firewallRule = Get-NetFirewallRule -DisplayName $firewallName -ErrorAction SilentlyContinue
-if (-not $firewallRule) {
+if ($PublicApi -and -not $firewallRule) {
   $firewallRule = New-NetFirewallRule `
     -DisplayName $firewallName `
     -Description 'Allow authenticated Sentaurus VM Agent API over host IPv6.' `
@@ -40,9 +41,11 @@ if (-not $firewallRule) {
     -LocalPort $Port `
     -Profile Public,Private `
     -EdgeTraversalPolicy Allow
-} else {
+} elseif ($PublicApi) {
   $firewallRule | Set-NetFirewallRule -Enabled True -Profile Public,Private -Action Allow -EdgeTraversalPolicy Allow
   $firewallRule | Get-NetFirewallApplicationFilter | Set-NetFirewallApplicationFilter -Program Any
+} elseif ($firewallRule) {
+  $firewallRule | Disable-NetFirewallRule
 }
 
 Start-ScheduledTask -TaskName $TaskName

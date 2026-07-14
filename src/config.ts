@@ -6,12 +6,14 @@ export type StoredConfig = {
   apiUrl?: string;
   authToken?: string;
   lastSessionId?: string;
+  archivedSessionIds?: string[];
 };
 
 export type ResolvedConfig = {
   apiUrl: string;
   authToken: string;
   lastSessionId?: string;
+  archivedSessionIds: string[];
   path: string;
 };
 
@@ -43,7 +45,11 @@ export function normalizeApiUrl(value: string): string {
 export async function loadStoredConfig(configPath = defaultConfigPath()): Promise<StoredConfig> {
   try {
     const value = JSON.parse(await readFile(configPath, "utf8")) as StoredConfig;
-    return value && typeof value === "object" ? value : {};
+    if (!value || typeof value !== "object") return {};
+    const archivedSessionIds = Array.isArray(value.archivedSessionIds)
+      ? [...new Set(value.archivedSessionIds.filter((item): item is string => typeof item === "string" && item.length > 0))]
+      : undefined;
+    return { ...value, ...(archivedSessionIds ? { archivedSessionIds } : {}) };
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === "ENOENT") return {};
@@ -59,10 +65,12 @@ export async function resolveConfig(overrides: StoredConfig = {}, configPath = d
   );
   const authToken = (overrides.authToken || process.env.SENTAURUS_VM_TOKEN || stored.authToken || "").trim();
   const lastSessionId = overrides.lastSessionId || stored.lastSessionId;
+  const archivedSessionIds = overrides.archivedSessionIds || stored.archivedSessionIds || [];
   return {
     apiUrl,
     authToken,
     ...(lastSessionId ? { lastSessionId } : {}),
+    archivedSessionIds,
     path: configPath
   };
 }
@@ -78,6 +86,16 @@ export async function updateStoredConfig(patch: StoredConfig, configPath = defau
   const next = { ...current, ...patch };
   await saveStoredConfig(next, configPath);
   return next;
+}
+
+export async function removeStoredConfigKeys(
+  keys: Array<keyof StoredConfig>,
+  configPath = defaultConfigPath()
+): Promise<StoredConfig> {
+  const current = await loadStoredConfig(configPath);
+  for (const key of keys) delete current[key];
+  await saveStoredConfig(current, configPath);
+  return current;
 }
 
 export function maskedToken(token: string): string {

@@ -50,3 +50,20 @@ test("SSE parser dispatches named JSON events", async () => {
     { event: "messages", data: { cursor: 2, messages: [] } }
   ]);
 });
+
+test("API client renames and deletes runs", async () => {
+  const seen: SeenRequest[] = [];
+  const mockFetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    seen.push({ url: String(input), ...(init ? { init } : {}) });
+    if (init?.method === "PATCH") {
+      return Response.json({ run: { id: "run_1", title: "renamed", status: "created", createdAt: "now", updatedAt: "now" } });
+    }
+    return Response.json({ ok: true });
+  }) as typeof fetch;
+  const api = new SentaurusApi({ baseUrl: "http://localhost:5175", token: "token", fetchImpl: mockFetch });
+  assert.equal((await api.updateRunTitle("run_1", "renamed")).title, "renamed");
+  await api.deleteRun("run_1");
+  assert.equal(seen[0]?.init?.method, "PATCH");
+  assert.equal(seen[0]?.init?.body, JSON.stringify({ title: "renamed" }));
+  assert.equal(seen[1]?.init?.method, "DELETE");
+});

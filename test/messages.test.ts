@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { belongsToTurn, isFinalReply, mergeMessages } from "../src/messages.js";
 import type { VmAgentMessage } from "../src/types.js";
-import { TurnRenderer } from "../src/ui.js";
+import { JsonlTurnRenderer, TurnRenderer } from "../src/ui.js";
 
 function message(id: string, content: string, meta: VmAgentMessage["meta"]): VmAgentMessage {
   return { id, role: "agent", content, createdAt: "2026-07-14T00:00:00Z", meta };
@@ -37,4 +37,16 @@ test("TurnRenderer emits incremental text once and completes", () => {
   assert.equal(renderer.render([first], "run_1", "turn_1"), false);
   assert.equal(renderer.render([second, done], "run_1", "turn_1"), true);
   assert.equal(output, "sentaurus\nabcdef\n\n");
+});
+
+test("JsonlTurnRenderer emits a machine-readable final response", () => {
+  let output = "";
+  const renderer = new JsonlTurnRenderer((value) => { output += value; });
+  const delta = message("d1", "ready", { kind: "agent_response_delta", targetMessageId: "target", sessionId: "run_1", turnId: "turn_1", append: true });
+  const done = message("d2", "", { kind: "agent_response_done", targetMessageId: "target", sessionId: "run_1", turnId: "turn_1", done: true });
+  assert.equal(renderer.render([delta, done], "run_1", "turn_1"), true);
+  const events = output.trim().split("\n").map((line) => JSON.parse(line) as { type: string; finalResponse?: string });
+  assert.equal(events.at(-1)?.type, "turn.completed");
+  assert.equal(events.at(-1)?.finalResponse, "ready");
+  assert.equal(renderer.finalMessage()?.content, "ready");
 });

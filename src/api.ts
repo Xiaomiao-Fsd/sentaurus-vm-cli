@@ -131,6 +131,22 @@ export class SentaurusApi {
     return body.run;
   }
 
+  async updateRunTitle(id: string, title: string, signal?: AbortSignal): Promise<RunSummary> {
+    const body = await this.json<{ run: RunSummary }>(`/api/runs/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ title }),
+      ...withSignal(signal)
+    });
+    return body.run;
+  }
+
+  async deleteRun(id: string, signal?: AbortSignal): Promise<void> {
+    await this.json<{ ok: boolean }>(`/api/runs/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      ...withSignal(signal)
+    });
+  }
+
   messages(after = 0, options: { limit?: number; sessionId?: string; signal?: AbortSignal } = {}): Promise<VmAgentHistoryResponse> {
     const query = new URLSearchParams({ after: String(after), limit: String(options.limit || 100) });
     if (options.sessionId) query.set("sessionId", options.sessionId);
@@ -163,6 +179,15 @@ export class SentaurusApi {
     });
     const synced = response.vmSync?.ok;
     const source = synced ? "vm-session-file" : "run-input";
+    const extension = path.extname(name).toLowerCase();
+    const imageType = new Map([
+      [".png", "image/png"],
+      [".jpg", "image/jpeg"],
+      [".jpeg", "image/jpeg"],
+      [".gif", "image/gif"],
+      [".webp", "image/webp"],
+      [".bmp", "image/bmp"]
+    ]).get(extension);
     const ref: VmAgentAttachmentRef = {
       id: `cli_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
       source,
@@ -170,12 +195,13 @@ export class SentaurusApi {
       path: synced ? response.vmSync.path || response.file.name : response.file.name,
       size: response.file.size,
       runId: sessionId,
+      ...(imageType ? { contentType: imageType } : {}),
       ...(synced && response.vmSync.category ? { category: response.vmSync.category } : {})
     };
     return {
       response,
       ref,
-      display: { ...ref, source: "run-input", path: response.file.name, kind: "file" }
+      display: { ...ref, source: "run-input", path: response.file.name, kind: imageType ? "image" : "file" }
     };
   }
 
