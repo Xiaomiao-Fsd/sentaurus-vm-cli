@@ -29,8 +29,8 @@ CentOS 7 VM worker
 ## 功能
 
 - Codex 风格的持续对话、会话新建和恢复
-- SSE 增量回复、worklog/仿真进度、并发会话隔离
-- 独立显示 provider 许可或确定性执行摘要，不输出模型原始思维链
+- SSE 增量回复、流式 reasoning item、结构化 tool/run worklog 与并发会话隔离
+- 实时显示 provider 许可或确定性执行摘要，不输出模型原始思维链
 - Id-Vg 最终回复直接显示固定提取器得到的 Vth、两点法/窗口法 SS、DIBL 与对应偏压
 - 仿真曲线、指标 JSON/DAT、CSV 和报告以结构化终端/JSONL 产物事件发布
 - 输入 `/` 即时显示 slash command 提示框，包含一行简介、方向键选择和 Tab 补齐

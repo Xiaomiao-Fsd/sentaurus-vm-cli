@@ -25,7 +25,7 @@ export const cliFeatures: CliFeature[] = [
   { name: "shell_completion", stage: "stable", source: "cli", description: "Generate PowerShell, Bash, Zsh, and Fish completions" },
   { name: "model_switching", stage: "stable", source: "worker", description: "Allowlisted VM model switching with max reasoning and family context limits" },
   { name: "host_bootstrap", stage: "stable", source: "host", description: "Start loopback Web API and wake the CentOS worker without exposing the token" },
-  { name: "sse_streaming", stage: "stable", source: "host", description: "Incremental replies and structured worklog progress" },
+  { name: "sse_streaming", stage: "stable", source: "worker", description: "Incremental provider reasoning summaries plus structured tool worklogs" },
   { name: "session_workflow", stage: "stable", source: "worker", description: "Revisioned per-session goal and plan state shared by CLI and Web" },
   { name: "durable_goals", stage: "stable", source: "worker", description: "Session-scoped /goal lifecycle with pause, block, and completion" },
   { name: "plan_mode", stage: "stable", source: "worker", description: "Read-only /plan state that locks file publishing and simulation execution" },

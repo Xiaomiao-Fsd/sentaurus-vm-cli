@@ -5,6 +5,8 @@ import {
   isAttachmentMessage,
   isFinalReply,
   isReasoningSummary,
+  isReasoningSummaryDelta,
+  isReasoningSummaryDone,
   mergeMessages
 } from "../src/messages.js";
 import type { VmAgentMessage } from "../src/types.js";
@@ -63,6 +65,71 @@ test("TurnRenderer emits incremental text once and completes", () => {
   assert.equal(renderer.render([first], "run_1", "turn_1"), false);
   assert.equal(renderer.render([second, done], "run_1", "turn_1"), true);
   assert.equal(output, "sentaurus\nabcdef\n\n");
+});
+
+test("renderers stream one reasoning item and ignore legacy progress", () => {
+  const deltaOne = message("r1", "Plan", {
+    kind: "agent_reasoning_summary_delta",
+    targetMessageId: "reasoning-item",
+    sessionId: "run_1",
+    turnId: "turn_1",
+    thinkingStage: "planning",
+    thinkingStatus: "streaming",
+    append: true,
+    delta: true
+  });
+  const deltaTwo = message("r2", " safely", {
+    kind: "agent_reasoning_summary_delta",
+    targetMessageId: "reasoning-item",
+    sessionId: "run_1",
+    turnId: "turn_1",
+    thinkingStage: "planning",
+    thinkingStatus: "streaming",
+    append: true,
+    delta: true
+  });
+  const reasoningDone = message("r3", "Plan safely", {
+    kind: "agent_reasoning_summary_done",
+    targetMessageId: "reasoning-item",
+    sessionId: "run_1",
+    turnId: "turn_1",
+    thinkingStage: "planning",
+    thinkingStatus: "completed",
+    done: true,
+    streamState: "done"
+  });
+  const progress: VmAgentMessage = {
+    ...message("progress", "Progress: redundant", { kind: "progress", sessionId: "run_1", turnId: "turn_1" }),
+    role: "system"
+  };
+  const final = message("final", "Finished", { kind: "llm", sessionId: "run_1", turnId: "turn_1" });
+
+  assert.equal(isReasoningSummaryDelta(deltaOne), true);
+  assert.equal(isReasoningSummaryDone(reasoningDone), true);
+  assert.equal(isFinalReply(reasoningDone), false);
+
+  let terminal = "";
+  const terminalRenderer = new TurnRenderer((value) => { terminal += value; });
+  assert.equal(terminalRenderer.render([deltaOne, progress], "run_1", "turn_1"), false);
+  assert.equal(terminalRenderer.render([deltaTwo, reasoningDone, final], "run_1", "turn_1"), true);
+  assert.match(terminal, /reasoning summary planning \/ streaming\nPlan safely\n\n/);
+  assert.doesNotMatch(terminal, /Progress: redundant/);
+  assert.equal((terminal.match(/reasoning summary/g) || []).length, 1);
+
+  let jsonl = "";
+  const jsonRenderer = new JsonlTurnRenderer((value) => { jsonl += value; });
+  assert.equal(jsonRenderer.render([deltaOne, progress, deltaTwo, reasoningDone, final], "run_1", "turn_1"), true);
+  jsonRenderer.finish("run_1", "turn_1");
+  const events = jsonl.trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+  assert.deepEqual(events.map((event) => event.type), [
+    "reasoning.summary.delta",
+    "reasoning.summary.delta",
+    "reasoning.summary",
+    "response.completed",
+    "turn.completed"
+  ]);
+  const completed = events.at(-1) as { reasoningSummaries: Array<{ text: string }> };
+  assert.deepEqual(completed.reasoningSummaries.map((summary) => summary.text), ["Plan safely"]);
 });
 
 test("JsonlTurnRenderer emits a machine-readable final response", () => {

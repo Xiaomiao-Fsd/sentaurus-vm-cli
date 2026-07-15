@@ -30,7 +30,7 @@ import { configureUtf8Terminal, relaunchForWindowsUtf8IfNeeded } from "./termina
 import type { RunSummary, VmSessionOutputCategory } from "./types.js";
 import { printError, printFiles, printHistory, printModelCatalog, printRuns, statusLine, style } from "./ui.js";
 
-const VERSION = "0.7.0";
+const VERSION = "0.8.0";
 const categories = new Set<VmSessionOutputCategory>([
   "我的输入",
   "仿真结果文件",

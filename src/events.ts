@@ -4,18 +4,22 @@ import {
   isAttachmentMessage,
   isFinalReply,
   isReasoningSummary,
+  isReasoningSummaryDelta,
+  isReasoningSummaryDone,
   isStreamDelta,
   isStreamDone,
   isWorklogMessage,
   mergeMessages,
   messageKind,
   messageTurnId,
+  reasoningSummaryTargetId,
   streamTargetId
 } from "./messages.js";
 
 export type CliEvent =
   | { type: "worklog"; phase: string; text: string; message: VmAgentMessage }
-  | { type: "reasoning.summary"; stage: string; status: string; text: string; message: VmAgentMessage }
+  | { type: "reasoning.summary.delta"; itemId: string; stage: string; status: string; text: string; message: VmAgentMessage }
+  | { type: "reasoning.summary"; itemId: string; stage: string; status: string; text: string; streamed: boolean; message: VmAgentMessage }
   | {
       type: "attachments";
       runId?: string;
@@ -37,6 +41,7 @@ export type TurnEventBatch = {
 export class TurnEventReducer {
   private readonly seen = new Set<string>();
   private readonly streamContent = new Map<string, string>();
+  private readonly reasoningContent = new Map<string, string>();
   private merged: VmAgentMessage[] = [];
 
   consume(messages: VmAgentMessage[], sessionId: string, turnId?: string): TurnEventBatch {
@@ -57,19 +62,59 @@ export class TurnEventReducer {
       this.seen.add(fingerprint);
       if (message.role === "user") continue;
 
+      const reasoningTarget = reasoningSummaryTargetId(message);
+      if (reasoningTarget) {
+        const previous = this.reasoningContent.get(reasoningTarget) || "";
+        const stage = String(message.meta?.thinkingStage || message.meta?.phase || "summary");
+        if (isReasoningSummaryDelta(message)) {
+          const next = message.meta?.append === false ? message.content : `${previous}${message.content}`;
+          const suffix = next.startsWith(previous) ? next.slice(previous.length) : message.content;
+          this.reasoningContent.set(reasoningTarget, next);
+          if (suffix) {
+            events.push({
+              type: "reasoning.summary.delta",
+              itemId: reasoningTarget,
+              stage,
+              status: String(message.meta?.thinkingStatus || message.meta?.status || "streaming"),
+              text: suffix,
+              message
+            });
+          }
+        } else if (isReasoningSummaryDone(message)) {
+          const text = message.content.trim() || previous.trim();
+          this.reasoningContent.set(reasoningTarget, text);
+          if (text) {
+            events.push({
+              type: "reasoning.summary",
+              itemId: reasoningTarget,
+              stage,
+              status: String(message.meta?.thinkingStatus || message.meta?.status || "completed"),
+              text,
+              streamed: previous.length > 0,
+              message
+            });
+          }
+        }
+        continue;
+      }
+
       if (isReasoningSummary(message)) {
         const text = message.content.trim();
         if (text) {
           events.push({
             type: "reasoning.summary",
+            itemId: message.id,
             stage: String(message.meta?.thinkingStage || message.meta?.phase || "summary"),
             status: String(message.meta?.thinkingStatus || message.meta?.status || "completed"),
             text,
+            streamed: false,
             message
           });
         }
         continue;
       }
+
+      if (messageKind(message) === "progress") continue;
 
       if (isWorklogMessage(message)) {
         const text = message.content.trim();
@@ -136,7 +181,9 @@ export class TurnEventReducer {
       sessionId,
       turnId: turnId || messageTurnId(event.message) || null,
       ...(event.type === "worklog" ? { phase: event.phase } : {}),
-      ...(event.type === "reasoning.summary" ? { stage: event.stage, status: event.status } : {}),
+      ...(event.type === "reasoning.summary" || event.type === "reasoning.summary.delta"
+        ? { itemId: event.itemId, stage: event.stage, status: event.status }
+        : {}),
       ...(event.type === "attachments" ? {
         runId: event.runId || null,
         attachments: event.attachments

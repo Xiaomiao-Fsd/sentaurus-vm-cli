@@ -155,7 +155,7 @@ vm-agent exec /status --json --output .\last-response.txt
 ```
 
 `--json` turn 输出是 JSONL，稳定事件包括 `session.started`、`turn.started`、`worklog`、
-`response.delta`、`response.completed`、`turn.completed` 和 `error`。SSE 不可用时会自动回退
+`reasoning.summary.delta`、`reasoning.summary`、`response.delta`、`response.completed`、`turn.completed` 和 `error`。SSE 不可用时会自动回退
 polling；两条路径使用同一个事件归一化器，不改变最终输出协议。
 
 ## 9. 兼容性与限制

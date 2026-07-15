@@ -5,11 +5,11 @@ const worklogKinds = new Set([
   "file_operation",
   "tool_run",
   "run_progress",
-  "run_diagnostic",
-  "progress",
-  "agent_thinking",
-  "agent_reasoning_summary"
+  "run_diagnostic"
 ]);
+
+const reasoningDeltaKind = "agent_reasoning_summary_delta";
+const reasoningDoneKind = "agent_reasoning_summary_done";
 
 export function messageKind(message: VmAgentMessage): string {
   return typeof message.meta?.kind === "string" ? message.meta.kind : "";
@@ -29,7 +29,22 @@ export function isWorklogMessage(message: VmAgentMessage): boolean {
 }
 
 export function isReasoningSummary(message: VmAgentMessage): boolean {
-  return messageKind(message) === "agent_reasoning_summary";
+  const kind = messageKind(message);
+  return kind === "agent_reasoning_summary" || kind === reasoningDoneKind;
+}
+
+export function isReasoningSummaryDelta(message: VmAgentMessage): boolean {
+  return message.role === "agent" && messageKind(message) === reasoningDeltaKind;
+}
+
+export function isReasoningSummaryDone(message: VmAgentMessage): boolean {
+  return message.role === "agent" && messageKind(message) === reasoningDoneKind;
+}
+
+export function reasoningSummaryTargetId(message: VmAgentMessage): string | undefined {
+  if (!isReasoningSummaryDelta(message) && !isReasoningSummaryDone(message)) return undefined;
+  const value = message.meta?.targetMessageId || message.meta?.messageId || message.meta?.streamId;
+  return typeof value === "string" && value ? value : undefined;
 }
 
 export function isAttachmentMessage(message: VmAgentMessage): boolean {
@@ -42,11 +57,14 @@ function streamState(message: VmAgentMessage): string {
 }
 
 export function isStreamDelta(message: VmAgentMessage): boolean {
-  return message.role === "agent" && (messageKind(message) === "agent_response_delta" || message.meta?.delta === true);
+  return message.role === "agent"
+    && !isReasoningSummaryDelta(message)
+    && (messageKind(message) === "agent_response_delta" || message.meta?.delta === true);
 }
 
 export function isStreamDone(message: VmAgentMessage): boolean {
   if (message.role !== "agent") return false;
+  if (isReasoningSummaryDone(message)) return false;
   const state = streamState(message);
   const kind = messageKind(message);
   return kind === "agent_response_done"
@@ -60,6 +78,7 @@ export function isStreamDone(message: VmAgentMessage): boolean {
 
 export function isStreamingDraft(message: VmAgentMessage): boolean {
   if (message.role !== "agent") return false;
+  if (isReasoningSummaryDelta(message) || isReasoningSummaryDone(message)) return false;
   if (isStreamDelta(message)) return true;
   if (isStreamDone(message)) return false;
   const state = streamState(message);
@@ -90,7 +109,7 @@ export function isFinalReply(message: VmAgentMessage): boolean {
     const kind = messageKind(message);
     return kind === "llm_error" || kind === "worker_error";
   }
-  if (message.role !== "agent" || isWorklogMessage(message) || isStreamingDraft(message)) return false;
+  if (message.role !== "agent" || isWorklogMessage(message) || isStreamingDraft(message) || isReasoningSummary(message) || isReasoningSummaryDelta(message)) return false;
   const kind = messageKind(message);
   if (kind === "vm_agent_attachments" || kind === "agent_trace" || kind === "worker_ready") return false;
   return true;

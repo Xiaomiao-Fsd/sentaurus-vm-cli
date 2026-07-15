@@ -1,6 +1,6 @@
 # VM Agent CLI 指令功能参考总览
 
-适用版本：`sentaurus-vm-cli 0.7.0`
+适用版本：`sentaurus-vm-cli 0.8.0`
 
 Codex 对照基线：本机安装的 `codex-cli 0.144.4` 实际命令帮助，核对日期为
 2026-07-15。本文既是使用手册，也是 Codex CLI 能力移植清单。
@@ -152,7 +152,7 @@ vm-agent model set gpt-5.6-terra
   `LLM_REASONING_EFFORT` 和模型超时，不读取或回传 API key。
 - 切换后自动重新部署并重启 worker；会话历史、目标、Sentaurus 文件和凭据保留。
 - `LLM_MODELS` 只保存当前所选模型，不做跨模型静默回退；失败会明确返回错误。
-- Responses 请求固定发送 `reasoning.effort=max`，并默认请求 `reasoning.summary=auto`；若兼容端点拒绝该字段，worker 会审计降级并自动重试。
+- Responses 请求固定发送 `reasoning.effort=max`、`reasoning.summary=auto` 和 `stream=true`；worker 按 provider item 与 summary index 实时发布摘要 delta。若兼容端点拒绝 summary 字段，worker 会审计降级并自动重试。
 - CLI 只显示 provider 明确返回的摘要或 worker 根据执行状态生成的确定性摘要，不读取、传输或展示模型原始思维链。
 - Id-Vg 运行的最终回复由固定 DF-ISE 提取器的结构化结果生成，包含实际漏压、有效点数、Vth、SS、DIBL、对应恒流/电压点和关键产物，不再复用运行前预期文本。
 - 272k/353k 是总窗口。worker 在 85% 时压缩上下文、95% 时执行硬保护，为最终回复保留空间。
@@ -211,8 +211,9 @@ vm-agent exec review [INSTRUCTIONS]
 | `session.started` | 已解析或创建会话，并取得 worker 与 workflow 状态 |
 | `attachment.completed` | 一个附件已上传并完成 VM 同步或 fallback |
 | `turn.started` | 本轮已开始 |
-| `worklog` | planning、progress、tool/run 等折叠工作日志 |
-| `reasoning.summary` | 可公开的安全推理/执行摘要，含 `stage` 与 `status` |
+| `worklog` | planning、file、tool/run 等可验证的折叠工作日志 |
+| `reasoning.summary.delta` | provider 许可的实时摘要增量，含稳定 `itemId`、`stage` 与 `status` |
+| `reasoning.summary` | 一个 reasoning item 的完整安全摘要，含 `itemId`、`stage` 与 `status` |
 | `attachments` | 已发布的仿真文件和图片，含 `runId` 与结构化附件数组 |
 | `response.delta` | agent 增量回复 |
 | `response.completed` | agent 完整回复或流结束消息 |

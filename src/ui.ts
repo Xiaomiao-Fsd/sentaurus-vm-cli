@@ -11,6 +11,8 @@ import type {
 import { MarkdownStream, renderMarkdown, sanitizeTerminalText } from "./markdown.js";
 import { TurnEventReducer, type CliEvent } from "./events.js";
 import {
+  isReasoningSummary,
+  isReasoningSummaryDelta,
   isStreamDelta,
   isStreamingDraft,
   isWorklogMessage
@@ -98,6 +100,8 @@ export function printHistory(messages: VmAgentMessage[], limit = 16): void {
   const visible = messages.filter((message) =>
     (message.role === "user" || message.role === "agent")
     && !isWorklogMessage(message)
+    && !isReasoningSummary(message)
+    && !isReasoningSummaryDelta(message)
     && !isStreamDelta(message)
     && !isStreamingDraft(message)
   ).slice(-limit);
@@ -131,6 +135,7 @@ function attachmentLine(attachment: Partial<VmAgentMessageAttachment>, index: nu
 export class TurnRenderer {
   private readonly reducer = new TurnEventReducer();
   private readonly markdown = new MarkdownStream();
+  private readonly openReasoning = new Set<string>();
   private streamOpen = false;
   private readonly write: Writer;
 
@@ -149,7 +154,20 @@ export class TurnRenderer {
   }
 
   private renderEvent(event: CliEvent): void {
+    if (event.type === "reasoning.summary.delta") {
+      if (!this.openReasoning.has(event.itemId)) {
+        this.write(`${style.yellow("reasoning summary")} ${style.dim(`${terminalInline(event.stage)} / streaming`)}\n`);
+        this.openReasoning.add(event.itemId);
+      }
+      this.write(style.dim(sanitizeTerminalText(event.text)));
+      return;
+    }
     if (event.type === "reasoning.summary") {
+      if (event.streamed && this.openReasoning.has(event.itemId)) {
+        this.write("\n\n");
+        this.openReasoning.delete(event.itemId);
+        return;
+      }
       this.write(`${style.yellow("reasoning summary")} ${style.dim(`${terminalInline(event.stage)} / ${terminalInline(event.status)}`)}\n`);
       this.write(`${renderMarkdown(event.text).trimEnd()}\n\n`);
       return;

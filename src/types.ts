@@ -19,10 +19,6 @@ export type VmAgentMessageMeta = {
   delta?: boolean;
   append?: boolean;
   done?: boolean;
-  progress?: number;
-  progressStage?: string;
-  progressStatus?: string;
-  progressDetail?: string;
   thinkingStage?: string;
   thinkingStatus?: string;
   summaryIndex?: number;
