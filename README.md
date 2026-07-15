@@ -198,6 +198,13 @@ sentaurus-vm chat --attach .\device.cmd "审阅并运行这个 deck"
 .\scripts\install-windows-server-task.ps1
 ```
 
+需要同一个持久化任务同时启动本机 IPv6 Web 前端（`[::]:5174`）时，安装时增加
+`-IncludeWeb`；后端仍只监听 `[::1]:5175`：
+
+```powershell
+.\scripts\install-windows-server-task.ps1 -IncludeWeb
+```
+
 外部只需连接主机 SSH 22，随后运行 `vm-agent`，不需要转发 5175。若外部程序确实需要
 直接调用 API，可显式使用 `-PublicApi` 重新开放防火墙，但必须同时配置 TLS。
 

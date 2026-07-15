@@ -4,6 +4,7 @@ param(
   [string]$TaskName = 'Sentaurus VM Agent IPv6 API',
   [int]$Port = 5175,
   [string]$ServerRepository = $env:SENTAURUS_WEB_AGENT_REPO,
+  [switch]$IncludeWeb,
   [switch]$PublicApi
 )
 
@@ -14,6 +15,11 @@ $arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$la
 if ($ServerRepository) {
   $resolvedRepository = (Resolve-Path -LiteralPath $ServerRepository).Path
   $arguments += " -ServerRepository `"$resolvedRepository`""
+}
+if ($IncludeWeb) {
+  $arguments += ' -IncludeWeb'
+} else {
+  $arguments += ' -ServerOnly'
 }
 
 $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arguments

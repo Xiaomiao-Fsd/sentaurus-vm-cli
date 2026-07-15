@@ -63,6 +63,10 @@ Set-Location E:\vscode\sentaurus-vm-cli
 Get-ScheduledTask -TaskName 'Sentaurus VM Agent IPv6 API'
 ```
 
+若还需要任务持久化运行 Vite 前端，可改用
+`.\scripts\install-windows-server-task.ps1 -IncludeWeb`。此时前端监听 `[::]:5174`，后端仍监听
+`[::1]:5175`；关闭安装脚本所在终端不会停止二者。
+
 启动日志写入 `sentaurus-web-agent/.ipv6-server.log`。
 
 ## 3. 获取当前公网 IPv6
