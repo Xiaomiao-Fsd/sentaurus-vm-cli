@@ -1,19 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { clearLine, cursorTo, moveCursor } from "node:readline";
-import type { Interface } from "node:readline/promises";
 import process from "node:process";
-
-type QuestionInterface = Pick<Interface, "question" | "getCursorPos"> & {
-  cursor: number;
-  readonly line: string;
-};
-
-type InputBoxFrame = {
-  top: string;
-  middle: string;
-  bottom: string;
-  width: number;
-};
 
 let terminalConfigured = false;
 const utf8ReexecEnvironment = "SENTAURUS_VM_UTF8_REEXEC";
@@ -73,76 +59,4 @@ export function configureUtf8Terminal(): void {
   if (!interactive) return;
 
   process.stdin.setEncoding("utf8");
-}
-
-export function inputBoxFrame(columns: number | undefined): InputBoxFrame {
-  const terminalWidth = Number.isFinite(columns) ? Math.floor(columns!) : 80;
-  const width = Math.max(24, Math.min(160, terminalWidth - 1));
-  const heading = "─ Message ";
-  const horizontal = Math.max(0, width - heading.length - 2);
-  return {
-    top: `╭${heading}${"─".repeat(horizontal)}╮`,
-    middle: `│${" ".repeat(width - 2)}│`,
-    bottom: `╰${"─".repeat(width - 2)}╯`,
-    width
-  };
-}
-
-function cyan(value: string, enabled: boolean): string {
-  return enabled ? `\u001b[36m${value}\u001b[0m` : value;
-}
-
-export async function askChatInput(
-  readline: QuestionInterface,
-  input: NodeJS.ReadStream = process.stdin,
-  output: NodeJS.WriteStream = process.stdout
-): Promise<string> {
-  if (!input.isTTY || !output.isTTY || (output.columns || 0) < 25) {
-    return readline.question("sentaurus> ");
-  }
-
-  const frame = inputBoxFrame(output.columns);
-  const color = !process.env.NO_COLOR;
-  output.write(`${cyan(frame.top, color)}\n`);
-
-  let answered = false;
-  let active = true;
-  const redrawEdges = () => {
-    if (!active) return;
-    const current = readline.getCursorPos();
-    const savedCursor = readline.cursor;
-    readline.cursor = readline.line.length;
-    const end = readline.getCursorPos();
-    readline.cursor = savedCursor;
-
-    output.write("\u001b7");
-    if (end.rows === 0 && end.cols < frame.width - 1) {
-      cursorTo(output, frame.width - 1);
-      output.write(cyan("│", color));
-    }
-    moveCursor(output, 0, Math.max(0, end.rows - current.rows) + 1);
-    cursorTo(output, 0);
-    clearLine(output, 0);
-    output.write(cyan(frame.bottom, color));
-    output.write("\u001b8");
-  };
-  const onKeypress = () => redrawEdges();
-  input.on("keypress", onKeypress);
-
-  try {
-    const pending = readline.question(`${cyan("│", color)} `);
-    redrawEdges();
-    const value = await pending;
-    answered = true;
-    return value;
-  } finally {
-    active = false;
-    input.off("keypress", onKeypress);
-    if (answered) {
-      // Enter leaves the cursor on the bottom border. Continue below the box
-      // without repainting conversation output or clearing scrollback.
-      moveCursor(output, 0, 1);
-      cursorTo(output, 0);
-    }
-  }
 }

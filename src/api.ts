@@ -12,6 +12,8 @@ import type {
   VmAgentModelId,
   VmAgentModelsResponse,
   VmAgentStatus,
+  VmAgentWorkflowResponse,
+  VmAgentWorkflowUpdate,
   VmHostStatus,
   VmSessionFilesResponse,
   VmSessionOutputCategory
@@ -177,6 +179,25 @@ export class SentaurusApi {
     return this.json("/api/vm/agent/messages", {
       method: "POST",
       body: JSON.stringify({ message, sessionId, attachments, displayAttachments }),
+      ...withSignal(signal)
+    });
+  }
+
+  workflow(sessionId: string, signal?: AbortSignal): Promise<VmAgentWorkflowResponse> {
+    return this.json(
+      `/api/vm/agent/sessions/${encodeURIComponent(sessionId)}/workflow`,
+      withSignal(signal)
+    );
+  }
+
+  updateWorkflow(
+    sessionId: string,
+    update: VmAgentWorkflowUpdate,
+    signal?: AbortSignal
+  ): Promise<VmAgentWorkflowResponse> {
+    return this.json(`/api/vm/agent/sessions/${encodeURIComponent(sessionId)}/workflow`, {
+      method: "PATCH",
+      body: JSON.stringify(update),
       ...withSignal(signal)
     });
   }

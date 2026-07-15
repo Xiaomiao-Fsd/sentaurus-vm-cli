@@ -23,7 +23,17 @@ test("feature list exposes migrated Codex-style capabilities", () => {
   assert.ok(cliFeatures.some((feature) => feature.name === "session_lifecycle"));
   assert.ok(cliFeatures.some((feature) => feature.name === "model_switching"));
   assert.ok(cliFeatures.some((feature) => feature.name === "unicode_input"));
+  assert.ok(cliFeatures.some((feature) => feature.name === "interactive_completion"));
+  assert.ok(cliFeatures.some((feature) => feature.name === "slash_command_palette"));
+  assert.ok(cliFeatures.some((feature) => feature.name === "interactive_session_selector"));
+  assert.ok(cliFeatures.some((feature) => feature.name === "provisional_session_titles"));
+  assert.ok(cliFeatures.some((feature) => feature.name === "session_workflow"));
+  assert.ok(cliFeatures.some((feature) => feature.name === "plan_mode"));
+  assert.ok(cliFeatures.some((feature) => feature.name === "reasoning_summaries"));
+  assert.ok(cliFeatures.some((feature) => feature.name === "structured_run_results"));
+  assert.ok(cliFeatures.some((feature) => feature.name === "artifact_events"));
   assert.match(formatFeatureList(), /jsonl_events/);
+  assert.match(formatFeatureList(), /markdown_streaming/);
 });
 
 test("review prompt is findings-first and does not run by default", () => {

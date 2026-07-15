@@ -1,6 +1,6 @@
 {
   "name": "sentaurus-vm-cli",
-  "version": "0.4.1",
+  "version": "0.7.0",
   "description": "Codex-style terminal client for the Sentaurus VM Agent SSH bridge",
   "type": "module",
   "bin": {
@@ -44,8 +44,14 @@
   },
   "license": "MIT",
   "devDependencies": {
+    "@types/marked-terminal": "^6.1.1",
     "@types/node": "^24.0.0",
     "tsx": "^4.20.0",
     "typescript": "^5.8.0"
+  },
+  "dependencies": {
+    "marked": "^15.0.12",
+    "marked-terminal": "^7.3.0",
+    "string-width": "^8.2.2"
   }
 }

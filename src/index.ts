@@ -24,11 +24,13 @@ import { mergeMessages } from "./messages.js";
 import { parseVmAgentModel } from "./models.js";
 import { askLine, askSecret } from "./prompt.js";
 import { buildReviewPrompt } from "./review.js";
+import { selectSession, shouldOpenSessionSelector } from "./session-selector.js";
+import { PROVISIONAL_SESSION_TITLE } from "./session-title.js";
 import { configureUtf8Terminal, relaunchForWindowsUtf8IfNeeded } from "./terminal.js";
 import type { RunSummary, VmSessionOutputCategory } from "./types.js";
 import { printError, printFiles, printHistory, printModelCatalog, printRuns, statusLine, style } from "./ui.js";
 
-const VERSION = "0.4.1";
+const VERSION = "0.7.0";
 const categories = new Set<VmSessionOutputCategory>([
   "我的输入",
   "仿真结果文件",
@@ -53,7 +55,8 @@ Usage:
   sentaurus-vm exec [prompt|-]          Run one turn non-interactively
   sentaurus-vm review [instructions]    Review Sentaurus decks/results
   sentaurus-vm resume [session]         Resume by ID, prefix, or exact title
-  sentaurus-vm new [title]              Create a session
+  sentaurus-vm resume --all             Select from all sessions interactively
+  sentaurus-vm new [title]              Create a session; first prompt titles it when omitted
   sentaurus-vm sessions [--all]         List active or all sessions
   sentaurus-vm history [session]        Show session conversation
   sentaurus-vm rename SESSION TITLE     Rename a session
@@ -74,13 +77,27 @@ Usage:
   sentaurus-vm config [--json]          Show resolved configuration (masked)
   sentaurus-vm local [command]          Use SSH-host bootstrap explicitly
 
+Interactive workflow:
+  /goal <objective>                     Set the durable session objective
+  /goal pause|resume|block|complete     Update the goal lifecycle
+  /plan                                 Enter read-only planning mode
+  /plan approve                         Approve the plan; does not start a run
+  /plan exit|clear                      Leave or reset planning state
+  /help [command]                       Show all interactive slash commands
+
+Interactive editor:
+  /                                     Open the live command palette
+  Up/Down                               Select a palette item, or browse history
+  Tab                                   Complete the selected command or value
+  Esc                                   Close the palette until input changes
+
 Options:
   --host                Read the API token only from the host-local Web .env
   --url URL             Remote API origin
   --token TOKEN         Remote API token; prefer SENTAURUS_VM_TOKEN
   --session ID          Session ID, unique prefix, or exact title
   --last                Use the newest active session
-  --all                 Include locally archived sessions
+  --all                 Include archived sessions; resume opens a TTY selector
   --title TITLE         Title when a new session is needed
   --attach PATH         Upload a file for the next message (repeatable)
   -i, --image PATH      Upload an image for the next message (repeatable)
@@ -394,7 +411,7 @@ export async function runCli(argv = process.argv.slice(2)): Promise<void> {
   }
 
   if (command === "new") {
-    const run = await api.createRun(parsed.values.title || args.join(" ") || `CLI session ${new Date().toISOString()}`);
+    const run = await api.createRun(parsed.values.title || args.join(" ") || PROVISIONAL_SESSION_TITLE);
     await updateStoredConfig({ lastSessionId: run.id }, config.path);
     process.stdout.write(json ? `${JSON.stringify({ run }, null, 2)}\n` : `${run.id}  ${run.title}\n`);
     return;
@@ -503,15 +520,36 @@ export async function runCli(argv = process.argv.slice(2)): Promise<void> {
   }
 
   if (chatCommand === "resume") {
-    if (!resumeSelector && !parsed.values.last && chatArgs[0]) resumeSelector = chatArgs.shift();
-    const session = await existingSession(
-      api,
-      resumeSelector,
-      config.lastSessionId,
-      config.archivedSessionIds,
-      parsed.values.last
-    );
-    resumeSelector = session.id;
+    if (shouldOpenSessionSelector({
+      includeAll: parsed.values.all,
+      ...(resumeSelector ? { selector: resumeSelector } : {}),
+      useLast: parsed.values.last,
+      remainingArgs: chatArgs,
+      interactiveCommand: !invokedExec,
+      json,
+      inputIsTty: Boolean(process.stdin.isTTY),
+      outputIsTty: Boolean(process.stdout.isTTY)
+    })) {
+      const selected = await selectSession(await api.listRuns(), {
+        archivedIds: new Set(config.archivedSessionIds),
+        ...(config.lastSessionId ? { currentId: config.lastSessionId } : {})
+      });
+      if (!selected) {
+        process.stdout.write("Cancelled.\n");
+        return;
+      }
+      resumeSelector = selected.id;
+    } else {
+      if (!resumeSelector && !parsed.values.last && chatArgs[0]) resumeSelector = chatArgs.shift();
+      const session = await existingSession(
+        api,
+        resumeSelector,
+        config.lastSessionId,
+        config.archivedSessionIds,
+        parsed.values.last
+      );
+      resumeSelector = session.id;
+    }
   }
 
   const attachments = [...(parsed.values.attach || []), ...(parsed.values.image || [])];

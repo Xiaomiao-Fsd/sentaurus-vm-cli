@@ -90,3 +90,41 @@ test("API client lists and switches allowlisted VM models", async () => {
   assert.equal(seen[1]?.init?.method, "PUT");
   assert.equal(seen[1]?.init?.body, JSON.stringify({ model: "gpt-5.6-sol" }));
 });
+
+test("API client reads and revision-updates session workflow state", async () => {
+  const requests: Array<{ url: string; method: string; body?: unknown }> = [];
+  const workflow = {
+    version: 1 as const,
+    revision: 2,
+    sessionId: "run_1",
+    goal: null,
+    plan: { mode: "default" as const, steps: [] }
+  };
+  const api = new SentaurusApi({
+    baseUrl: "http://localhost:5175",
+    token: "token",
+    fetchImpl: async (input, init) => {
+      requests.push({
+        url: String(input),
+        method: init?.method || "GET",
+        ...(init?.body ? { body: JSON.parse(String(init.body)) } : {})
+      });
+      return Response.json({ ok: true, workflow, capabilities: ["session_workflow_v1"] });
+    }
+  });
+
+  assert.equal((await api.workflow("run_1")).workflow.revision, 2);
+  await api.updateWorkflow("run_1", {
+    action: "goal.set",
+    expectedRevision: 2,
+    payload: { objective: "Calibrate threshold" }
+  });
+  assert.deepEqual(requests, [
+    { url: "http://localhost:5175/api/vm/agent/sessions/run_1/workflow", method: "GET" },
+    {
+      url: "http://localhost:5175/api/vm/agent/sessions/run_1/workflow",
+      method: "PATCH",
+      body: { action: "goal.set", expectedRevision: 2, payload: { objective: "Calibrate threshold" } }
+    }
+  ]);
+});

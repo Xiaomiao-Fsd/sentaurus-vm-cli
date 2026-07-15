@@ -28,6 +28,14 @@ export function isWorklogMessage(message: VmAgentMessage): boolean {
   return worklogKinds.has(messageKind(message)) || message.meta?.foldable === true;
 }
 
+export function isReasoningSummary(message: VmAgentMessage): boolean {
+  return messageKind(message) === "agent_reasoning_summary";
+}
+
+export function isAttachmentMessage(message: VmAgentMessage): boolean {
+  return messageKind(message) === "vm_agent_attachments";
+}
+
 function streamState(message: VmAgentMessage): string {
   const value = message.meta?.streamState ?? message.meta?.status;
   return typeof value === "string" ? value.toLowerCase() : "";

@@ -30,7 +30,16 @@ CentOS 7 VM worker
 
 - Codex 风格的持续对话、会话新建和恢复
 - SSE 增量回复、worklog/仿真进度、并发会话隔离
-- `/goal`、`/side`、`/status`、`/tools` 等 VM worker 命令透传
+- 独立显示 provider 许可或确定性执行摘要，不输出模型原始思维链
+- Id-Vg 最终回复直接显示固定提取器得到的 Vth、两点法/窗口法 SS、DIBL 与对应偏压
+- 仿真曲线、指标 JSON/DAT、CSV 和报告以结构化终端/JSONL 产物事件发布
+- 输入 `/` 即时显示 slash command 提示框，包含一行简介、方向键选择和 Tab 补齐
+- `resume --all` 提供可用方向键选择的全量 session 列表，标题优先、ID 仅作辅助
+- 无显式标题的新 session 会在首条自然语言消息提交后生成临时标题
+- 统一 slash command 注册表，支持 goal/plan 子命令、会话、模型和计划步骤动态候选
+- `/goal` 完整生命周期，以及带执行硬锁的 `/plan` 只读规划模式
+- `/side`、`/status`、`/tools` 等受支持 VM worker 命令透传
+- 流式 Markdown 渲染，支持代码块、列表、表格和终端宽度重排
 - `doctor`、`status` 和 `connect` 完整检查/部署 SSH worker 链路
 - `vm-agent` 主机模式自动启动 Web 服务并按需唤醒 worker，不要求用户输入 token
 - 本地附件上传并同步到 VM session
@@ -42,7 +51,8 @@ CentOS 7 VM worker
 - Sentaurus 专用 `review`，以及会话重命名、归档、取消归档和确认删除
 - `-C/--cd`、`-i/--image` 与 PowerShell/Bash/Zsh/Fish 命令补全
 - 五模型白名单切换、固定 `max` 推理，以及非 GPT-5.6 272k / GPT-5.6 353k 上下文策略
-- Codex 风格带框输入区；Windows SSH 会话自动切换 UTF-8，可直接输入和粘贴中文
+- Codex 风格内联编辑器；支持中文 grapheme、历史检索、多行输入和窗口重排
+- Windows SSH 会话自动切换 UTF-8，可直接输入和粘贴中文
 
 ## 环境要求
 
@@ -89,7 +99,18 @@ vm-agent
 `vm-agent` 会在 Windows 主机内部完成：定位 `Sentaurus-agent` 仓库、读取本地 `.env`、
 启动/等待 Fastify 服务、通过 `sentaurus-centos7` SSH 检查 CentOS 7 worker、仅在 worker
 未运行时执行 `connect`，最后进入交互会话。token 不需要传给外部设备，也不会出现在命令行。
-进入交互会话后，在 `Message` 边框内直接输入中文并按 Enter 发送。
+进入交互会话后，在 `> ` 提示符输入中文并按 Enter 发送；`Shift+Enter` 或
+`Ctrl+J` 插入换行。输入 `/` 会立即打开命令提示框，`Up`/`Down` 选择，Tab 补齐，
+`Esc` 关闭；提示框关闭时 `Up`/`Down` 仍用于浏览输入历史。
+
+恢复会话时可以直接打开全量选择框：
+
+```powershell
+vm-agent resume --all
+```
+
+选择框默认定位到上次使用的 session；`Up`/`Down` 移动，`Enter` 恢复，`Esc` 或
+`Ctrl+C` 取消。列表包含本地归档项并明确标记，但恢复归档 session 不会自动取消归档。
 
 单次执行也可以使用同一个固定命令：
 
@@ -113,6 +134,7 @@ vm-agent models                     查看模型库和当前模型
 vm-agent model gpt-5.6-sol          切换模型并重启 VM worker
 sentaurus-vm chat "检查 VM 工具状态"  单次提问
 sentaurus-vm resume <session-prefix> 恢复会话
+vm-agent resume --all                交互选择任意会话
 sentaurus-vm sessions                列出会话
 sentaurus-vm archive <session>       本地归档会话
 sentaurus-vm completion powershell  生成 PowerShell 补全
@@ -127,9 +149,30 @@ sentaurus-vm artifact <run> <path>   下载 run artifact
 
 完整的指令、选项、JSONL 事件和 Codex CLI 移植对照见
 [VM Agent CLI 指令功能参考总览](docs/cli-command-reference.zh-CN.md)。
+本次重构范围、兼容性和验收记录见
+[0.5.0 重构交付说明](docs/refactor-delivery-0.5.0.zh-CN.md)。
+命令提示框的交互规则和验收记录见
+[0.6.0 命令提示框说明](docs/command-palette-0.6.0.zh-CN.md)。
+Session 选择框和首问临时标题的规则见
+[0.7.0 Session 恢复说明](docs/session-resume-0.7.0.zh-CN.md)。
 
-交互模式输入 `/help` 可查看本地命令。没有被本地处理的 slash command 会原样发送给
-VM worker，因此 `/goal`、`/side`、`/status`、`/tools` 等行为与 Web UI 一致。
+交互模式输入 `/help` 可查看注册命令。`/goal` 与 `/plan` 通过带 revision 的结构化 API
+修改会话工作流；`/side`、`/status`、`/tools` 等注册的远端命令原样发送给 VM worker。
+未知 slash command 会被 CLI 拒绝并提示 `/help`，避免拼写错误意外进入模型对话。
+
+推荐的目标与规划流程：
+
+```text
+/goal 校准器件阈值电压，并输出可复现的 Id-Vg 结果
+/plan
+检查已有 deck，制定最小改动和验证步骤
+/plan show
+/plan approve
+按已批准计划执行第一步
+```
+
+`/plan` 模式下 worker 会硬性跳过文件发布和 `SENTAURUS_RUN_REQUEST` 执行。`/plan approve`
+只解除执行锁，不会自行启动仿真；批准后仍需发送明确的执行消息。
 
 附件示例：
 
@@ -171,6 +214,7 @@ sentaurus-vm chat --attach .\device.cmd "审阅并运行这个 deck"
 - VM SSH key 只保留在 Web 服务主机；VM 的 LLM 凭据只保留在 CentOS 7。
 - `connect` 会更新 worker 程序文件并重启 worker，但保留 VM 内 `.env`、配置、历史和产物。
 - 文件路径、扩展名、大小和 artifact 路径继续由 Web 服务与 worker 校验。
+- 工作流端点只接受固定 action 与 session ID，不接受 VM 路径或 shell；revision 冲突返回 409。
 - 不要提交 `~/.sentaurus-vm-cli/config.json`、服务端 `.env` 或任何私钥。
 
 ## 开发验证
@@ -182,7 +226,8 @@ npm run build
 npm pack --dry-run
 ```
 
-项目使用 Node 原生 `fetch`、SSE、`readline` 和 `FormData`，运行时没有第三方依赖。
+网络和协议层使用 Node 原生 `fetch`、SSE 与 `FormData`；终端渲染使用 `marked`、
+`marked-terminal` 和 `string-width`。运行时依赖已锁定在 `package-lock.json`。
 
 ## License
 

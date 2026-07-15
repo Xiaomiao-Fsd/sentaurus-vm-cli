@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { belongsToTurn, isFinalReply, mergeMessages } from "../src/messages.js";
+import {
+  belongsToTurn,
+  isAttachmentMessage,
+  isFinalReply,
+  isReasoningSummary,
+  mergeMessages
+} from "../src/messages.js";
 import type { VmAgentMessage } from "../src/types.js";
 import { JsonlTurnRenderer, statusLine, TurnRenderer } from "../src/ui.js";
 
@@ -28,6 +34,26 @@ test("turn filtering rejects messages from concurrent sessions", () => {
   assert.equal(belongsToTurn(other, "run_a", "turn_a"), false);
 });
 
+test("reasoning summaries and artifact publications stay auxiliary", () => {
+  const summary = message("summary", "Grounded in fixed extractor output.", {
+    kind: "agent_reasoning_summary",
+    sessionId: "run_1",
+    turnId: "turn_1",
+    thinkingStage: "final",
+    thinkingStatus: "completed"
+  });
+  const artifacts = message("attachments", "Published 1 VM attachment.", {
+    kind: "vm_agent_attachments",
+    sessionId: "run_1",
+    turnId: "turn_1",
+    runId: "run_result"
+  });
+  assert.equal(isReasoningSummary(summary), true);
+  assert.equal(isAttachmentMessage(artifacts), true);
+  assert.equal(isFinalReply(summary), false);
+  assert.equal(isFinalReply(artifacts), false);
+});
+
 test("TurnRenderer emits incremental text once and completes", () => {
   let output = "";
   const renderer = new TurnRenderer((value) => { output += value; });
@@ -45,10 +71,93 @@ test("JsonlTurnRenderer emits a machine-readable final response", () => {
   const delta = message("d1", "ready", { kind: "agent_response_delta", targetMessageId: "target", sessionId: "run_1", turnId: "turn_1", append: true });
   const done = message("d2", "", { kind: "agent_response_done", targetMessageId: "target", sessionId: "run_1", turnId: "turn_1", done: true });
   assert.equal(renderer.render([delta, done], "run_1", "turn_1"), true);
+  renderer.finish("run_1", "turn_1");
   const events = output.trim().split("\n").map((line) => JSON.parse(line) as { type: string; finalResponse?: string });
   assert.equal(events.at(-1)?.type, "turn.completed");
   assert.equal(events.at(-1)?.finalResponse, "ready");
   assert.equal(renderer.finalMessage()?.content, "ready");
+});
+
+test("renderers expose safe summaries and concrete run artifacts", () => {
+  const summary = message("summary", "最终结论来自结构化 DF-ISE 输出。", {
+    kind: "agent_reasoning_summary",
+    sessionId: "run_1",
+    turnId: "turn_1",
+    thinkingStage: "final",
+    thinkingStatus: "completed"
+  });
+  const final = message("final", "SS_low=84.037618 mV/dec\n\nDIBL=87.938951 mV/V", {
+    kind: "run_final",
+    sessionId: "run_1",
+    turnId: "turn_1",
+    runId: "run_20260715_result",
+    runStatus: "succeeded"
+  });
+  const artifacts: VmAgentMessage = {
+    ...message("attachments", "Published 2 VM attachments.", {
+      kind: "vm_agent_attachments",
+      sessionId: "run_1",
+      turnId: "turn_1",
+      runId: "run_20260715_result",
+      attachmentCount: 2
+    }),
+    attachments: [
+      {
+        id: "plot",
+        kind: "image",
+        source: "vm-run-artifact",
+        name: "idvg_plot.png",
+        path: "artifacts/idvg_plot.png",
+        runId: "run_20260715_result",
+        size: 4282,
+        contentType: "image/png"
+      },
+      {
+        id: "metrics",
+        kind: "file",
+        source: "vm-run-artifact",
+        name: "ss_dibl_metrics.json",
+        path: "artifacts/ss_dibl_metrics.json",
+        runId: "run_20260715_result",
+        size: 3030,
+        contentType: "application/json"
+      }
+    ]
+  };
+
+  let terminal = "";
+  const terminalRenderer = new TurnRenderer((value) => { terminal += value; });
+  assert.equal(terminalRenderer.render([summary, final, artifacts], "run_1", "turn_1"), true);
+  assert.match(terminal, /reasoning summary final \/ completed/);
+  assert.match(terminal, /SS_low=84\.037618 mV\/dec/);
+  assert.match(terminal, /artifacts run_20260715_result/);
+  assert.match(terminal, /\[image\] idvg_plot\.png \| artifacts\/idvg_plot\.png \| 4\.2 KiB/);
+  assert.match(terminal, /\[file\] ss_dibl_metrics\.json/);
+
+  let jsonl = "";
+  const jsonRenderer = new JsonlTurnRenderer((value) => { jsonl += value; });
+  assert.equal(jsonRenderer.render([summary, final, artifacts], "run_1", "turn_1"), true);
+  assert.doesNotMatch(jsonl, /"type":"turn\.completed"/);
+  jsonRenderer.finish("run_1", "turn_1");
+  const events = jsonl.trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+  assert.deepEqual(events.map((event) => event.type), [
+    "reasoning.summary",
+    "response.completed",
+    "attachments",
+    "turn.completed"
+  ]);
+  const completed = events.at(-1) as {
+    runId: string;
+    runStatus: string;
+    finalResponse: string;
+    reasoningSummaries: unknown[];
+    attachments: unknown[];
+  };
+  assert.equal(completed.runId, "run_20260715_result");
+  assert.equal(completed.runStatus, "succeeded");
+  assert.match(completed.finalResponse, /DIBL=87\.938951/);
+  assert.equal(completed.reasoningSummaries.length, 1);
+  assert.equal(completed.attachments.length, 2);
 });
 
 test("statusLine includes reasoning and the effective context window", () => {

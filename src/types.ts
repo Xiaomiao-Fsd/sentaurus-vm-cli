@@ -11,15 +11,30 @@ export type VmAgentMessageMeta = {
   messageId?: string;
   phase?: string;
   status?: string;
+  foldable?: boolean;
+  collapsedByDefault?: boolean;
+  publicWorklog?: boolean;
+  displayLanguage?: string;
   streamState?: string;
   delta?: boolean;
   append?: boolean;
   done?: boolean;
   progress?: number;
+  progressStage?: string;
+  progressStatus?: string;
+  progressDetail?: string;
+  thinkingStage?: string;
+  thinkingStatus?: string;
+  summaryIndex?: number;
+  summaryOfGroup?: boolean;
+  runStatus?: string;
   tool?: string;
   commandLabel?: string;
   exitCode?: number;
   durationMs?: number;
+  worklogDurationMs?: number;
+  attachmentCount?: number;
+  imageAttachmentCount?: number;
 } & JsonObject;
 
 export type VmAgentAttachmentSource = "run-input" | "vm-session-file" | "vm-run-artifact";
@@ -133,6 +148,80 @@ export type VmAgentHistoryResponse = {
 
 export type VmAgentMessageResponse = VmAgentHistoryResponse & {
   message: VmAgentMessage;
+};
+
+export type VmAgentGoalStatus = "active" | "paused" | "blocked" | "complete";
+
+export type VmAgentGoal = {
+  objective: string;
+  status: VmAgentGoalStatus;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  blockedReason?: string;
+};
+
+export type VmAgentPlanStepStatus = "pending" | "in_progress" | "completed";
+
+export type VmAgentPlanStep = {
+  id: string;
+  step: string;
+  status: VmAgentPlanStepStatus;
+};
+
+export type VmAgentPlan = {
+  mode: "default" | "plan";
+  explanation?: string;
+  steps: VmAgentPlanStep[];
+  updatedAt?: string;
+  approvedAt?: string;
+};
+
+export type VmAgentWorkflow = {
+  version: 1;
+  revision: number;
+  sessionId: string;
+  goal: VmAgentGoal | null;
+  plan: VmAgentPlan;
+  updatedAt?: string;
+};
+
+export type VmAgentWorkflowAction =
+  | "goal.set"
+  | "goal.pause"
+  | "goal.resume"
+  | "goal.block"
+  | "goal.complete"
+  | "goal.clear"
+  | "plan.enter"
+  | "plan.set"
+  | "plan.step"
+  | "plan.approve"
+  | "plan.exit"
+  | "plan.clear";
+
+type VmAgentWorkflowRevision = {
+  expectedRevision?: number;
+};
+
+export type VmAgentWorkflowUpdate = VmAgentWorkflowRevision & (
+  | { action: "goal.set"; payload: { objective: string } }
+  | { action: "goal.block"; payload?: { reason?: string } }
+  | { action: "plan.set"; payload: { explanation?: string; steps: VmAgentPlanStep[] } }
+  | { action: "plan.step"; payload: { stepId: string; status: VmAgentPlanStepStatus } }
+  | {
+      action: Exclude<
+        VmAgentWorkflowAction,
+        "goal.set" | "goal.block" | "plan.set" | "plan.step"
+      >;
+      payload?: never;
+    }
+);
+
+export type VmAgentWorkflowResponse = {
+  ok: boolean;
+  workflow: VmAgentWorkflow;
+  capabilities: string[];
 };
 
 export type VmAgentConnectResponse = {

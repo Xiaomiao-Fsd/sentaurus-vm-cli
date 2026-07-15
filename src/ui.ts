@@ -1,16 +1,19 @@
 import process from "node:process";
-import type { RunSummary, VmAgentMessage, VmAgentModelsResponse, VmAgentStatus, VmSessionOutputFile } from "./types.js";
+import type {
+  RunSummary,
+  VmAgentMessage,
+  VmAgentMessageAttachment,
+  VmAgentModelsResponse,
+  VmAgentStatus,
+  VmAgentWorkflow,
+  VmSessionOutputFile
+} from "./types.js";
+import { MarkdownStream, renderMarkdown, sanitizeTerminalText } from "./markdown.js";
+import { TurnEventReducer, type CliEvent } from "./events.js";
 import {
-  belongsToTurn,
-  isFinalReply,
   isStreamDelta,
-  isStreamDone,
   isStreamingDraft,
-  isWorklogMessage,
-  mergeMessages,
-  messageKind,
-  messageTurnId,
-  streamTargetId
+  isWorklogMessage
 } from "./messages.js";
 
 const colorEnabled = Boolean(process.stdout.isTTY && !process.env.NO_COLOR);
@@ -24,6 +27,10 @@ export const style = {
   yellow: (value: string) => ansi(33, value),
   cyan: (value: string) => ansi(36, value)
 };
+
+function terminalInline(value: unknown): string {
+  return sanitizeTerminalText(String(value ?? "")).replace(/\s+/gu, " ").trim();
+}
 
 export function shortId(value: string): string {
   return value.length > 20 ? `${value.slice(0, 12)}...${value.slice(-6)}` : value;
@@ -52,12 +59,17 @@ export function printModelCatalog(response: VmAgentModelsResponse): void {
   }
 }
 
-export function printBanner(apiUrl: string, session: RunSummary, status: VmAgentStatus): void {
+export function printBanner(apiUrl: string, session: RunSummary, status: VmAgentStatus, workflow?: VmAgentWorkflow): void {
   process.stdout.write(`\n${style.bold("Sentaurus VM CLI")}\n`);
-  process.stdout.write(`${style.dim("API")}      ${apiUrl}\n`);
-  process.stdout.write(`${style.dim("Session")}  ${session.id} (${session.title})\n`);
+  process.stdout.write(`${style.dim("API")}      ${terminalInline(apiUrl)}\n`);
+  process.stdout.write(`${style.dim("Session")}  ${terminalInline(session.id)} (${terminalInline(session.title)})\n`);
   process.stdout.write(`${style.dim("VM")}       ${statusLine(status)}\n`);
-  process.stdout.write(`${style.dim("Hint")}     /help shows local commands; VM commands such as /goal and /side pass through.\n\n`);
+  if (workflow?.goal) {
+    const objective = terminalInline(workflow.goal.objective);
+    process.stdout.write(`${style.dim("Goal")}     ${workflow.goal.status} | ${objective}\n`);
+  }
+  if (workflow?.plan.mode === "plan") process.stdout.write(`${style.yellow("Plan")}     read-only planning mode | revision ${workflow.revision}\n`);
+  process.stdout.write(`${style.dim("Hint")}     Type / for commands; Up/Down selects; Tab completes; /goal and /plan manage workflow.\n\n`);
 }
 
 export function printRuns(runs: RunSummary[], currentId?: string, archivedIds: ReadonlySet<string> = new Set()): void {
@@ -68,7 +80,7 @@ export function printRuns(runs: RunSummary[], currentId?: string, archivedIds: R
   for (const run of runs) {
     const current = run.id === currentId ? "*" : " ";
     const archived = archivedIds.has(run.id) ? "A" : " ";
-    process.stdout.write(`${current}${archived} ${run.id}  ${run.status.padEnd(12)}  ${run.title}\n`);
+    process.stdout.write(`${current}${archived} ${terminalInline(run.id)}  ${terminalInline(run.status).padEnd(12)}  ${terminalInline(run.title)}\n`);
   }
 }
 
@@ -78,7 +90,7 @@ export function printFiles(files: VmSessionOutputFile[]): void {
     return;
   }
   files.forEach((file, index) => {
-    process.stdout.write(`${String(index + 1).padStart(3)}  ${formatBytes(file.size).padStart(10)}  ${file.category}  ${file.path}\n`);
+    process.stdout.write(`${String(index + 1).padStart(3)}  ${formatBytes(file.size).padStart(10)}  ${terminalInline(file.category)}  ${terminalInline(file.path)}\n`);
   });
 }
 
@@ -93,7 +105,7 @@ export function printHistory(messages: VmAgentMessage[], limit = 16): void {
   process.stdout.write(`${style.dim("Recent conversation")}\n`);
   for (const message of visible) {
     const label = message.role === "user" ? style.cyan("you") : style.green("sentaurus");
-    process.stdout.write(`${label}\n${message.content.trim()}\n\n`);
+    process.stdout.write(`${label}\n${renderMarkdown(message.content.trim())}\n`);
   }
 }
 
@@ -102,87 +114,96 @@ type Writer = (value: string) => void;
 export type ReplyRenderer = {
   render(messages: VmAgentMessage[], sessionId: string, turnId?: string): boolean;
   finalMessage(): VmAgentMessage | undefined;
+  finish?(sessionId: string, turnId?: string): void;
 };
 
+function attachmentLine(attachment: Partial<VmAgentMessageAttachment>, index: number): string {
+  const kind = attachment.kind === "image" ? "image" : "file";
+  const name = terminalInline(attachment.name || attachment.path || attachment.id || `attachment-${index + 1}`);
+  const path = terminalInline(attachment.path || "");
+  const location = path && path !== name ? ` | ${path}` : "";
+  const size = typeof attachment.size === "number" && Number.isFinite(attachment.size) && attachment.size >= 0
+    ? ` | ${formatBytes(attachment.size)}`
+    : "";
+  return `  ${String(index + 1).padStart(2)}  [${kind}] ${name}${location}${size}`;
+}
+
 export class TurnRenderer {
-  private readonly seen = new Set<string>();
-  private readonly streamContent = new Map<string, string>();
+  private readonly reducer = new TurnEventReducer();
+  private readonly markdown = new MarkdownStream();
   private streamOpen = false;
   private readonly write: Writer;
-  private merged: VmAgentMessage[] = [];
 
   constructor(write: Writer = (value) => process.stdout.write(value)) {
     this.write = write;
   }
 
   render(messages: VmAgentMessage[], sessionId: string, turnId?: string): boolean {
-    const accepted = messages.filter((message) => belongsToTurn(message, sessionId, turnId));
-    this.merged = mergeMessages(this.merged, accepted);
-    let complete = false;
-    for (const message of accepted) {
-      if (this.seen.has(message.id) && !streamTargetId(message)) continue;
-      this.seen.add(message.id);
-
-      if (message.role === "user") continue;
-      if (isWorklogMessage(message)) {
-        const phase = String(message.meta?.phase || message.meta?.status || messageKind(message) || "work");
-        const content = message.content.trim();
-        if (content) this.write(`${style.dim(`[${phase}] ${content}`)}\n`);
-        continue;
-      }
-
-      const target = streamTargetId(message);
-      if (target) {
-        const previous = this.streamContent.get(target) || "";
-        const append = isStreamDelta(message) || message.meta?.append === true;
-        const next = append ? `${previous}${message.content}` : message.content || previous;
-        let suffix = next;
-        if (next.startsWith(previous)) suffix = next.slice(previous.length);
-        if (!this.streamOpen) {
-          this.write(`${style.green("sentaurus")}\n`);
-          this.streamOpen = true;
-        }
-        if (suffix) this.write(suffix);
-        this.streamContent.set(target, next);
-        if (isStreamDone(message)) {
-          this.write("\n\n");
-          this.streamOpen = false;
-          complete = true;
-        }
-        continue;
-      }
-
-      if (message.content.trim()) {
-        if (this.streamOpen) {
-          this.write("\n\n");
-          this.streamOpen = false;
-        }
-        const label = message.role === "system" ? style.red("system") : style.green("sentaurus");
-        this.write(`${label}\n${message.content.trim()}\n\n`);
-      }
-      if (isFinalReply(message)) complete = true;
-    }
-    return complete;
+    const batch = this.reducer.consume(messages, sessionId, turnId);
+    for (const event of batch.events) this.renderEvent(event);
+    return batch.complete;
   }
 
   finalMessage(): VmAgentMessage | undefined {
-    return [...this.merged].reverse().find((message) => isFinalReply(message));
+    return this.reducer.finalMessage();
+  }
+
+  private renderEvent(event: CliEvent): void {
+    if (event.type === "reasoning.summary") {
+      this.write(`${style.yellow("reasoning summary")} ${style.dim(`${terminalInline(event.stage)} / ${terminalInline(event.status)}`)}\n`);
+      this.write(`${renderMarkdown(event.text).trimEnd()}\n\n`);
+      return;
+    }
+    if (event.type === "worklog") {
+      this.write(`${style.dim(`[${event.phase}] ${sanitizeTerminalText(event.text)}`)}\n`);
+      return;
+    }
+    if (event.type === "attachments") {
+      const run = event.runId ? ` ${style.dim(shortId(event.runId))}` : "";
+      this.write(`${style.cyan("artifacts")}${run}\n`);
+      if (event.attachments.length) {
+        event.attachments.forEach((attachment, index) => this.write(`${attachmentLine(attachment, index)}\n`));
+      } else if (event.text) {
+        this.write(`${sanitizeTerminalText(event.text)}\n`);
+      } else {
+        this.write(`${style.dim("  No published attachment metadata.")}\n`);
+      }
+      this.write("\n");
+      return;
+    }
+    if (event.type === "response.delta") {
+      if (!this.streamOpen) {
+        this.write(`${style.green("sentaurus")}\n`);
+        this.streamOpen = true;
+      }
+      const rendered = this.markdown.push(event.text);
+      if (rendered) this.write(rendered);
+      return;
+    }
+    if (event.type === "response.completed" && event.streamed) {
+      const rendered = this.markdown.flush();
+      if (rendered) this.write(rendered);
+      this.streamOpen = false;
+      return;
+    }
+    if (this.streamOpen) {
+      const rendered = this.markdown.flush();
+      if (rendered) this.write(rendered);
+      this.write("\n");
+      this.streamOpen = false;
+    }
+    const label = event.type === "error" ? style.red("system") : style.green("sentaurus");
+    this.write(`${label}\n${renderMarkdown(event.text).trimEnd()}\n\n`);
   }
 }
 
-function jsonEventType(message: VmAgentMessage): string {
-  if (message.role === "system") return "error";
-  if (isWorklogMessage(message)) return "worklog";
-  if (isStreamDelta(message) || isStreamingDraft(message)) return "response.delta";
-  if (isStreamDone(message) || isFinalReply(message)) return "response.completed";
-  return "message";
-}
-
 export class JsonlTurnRenderer implements ReplyRenderer {
-  private readonly seen = new Set<string>();
+  private readonly reducer = new TurnEventReducer();
   private readonly write: Writer;
-  private merged: VmAgentMessage[] = [];
   private completed = false;
+  private completionEmitted = false;
+  private readonly reasoningSummaries: Array<{ stage: string; status: string; text: string; messageId: string }> = [];
+  private readonly publishedAttachments = new Map<string, Partial<VmAgentMessageAttachment>>();
 
   constructor(write: Writer = (value) => process.stdout.write(value)) {
     this.write = write;
@@ -193,45 +214,50 @@ export class JsonlTurnRenderer implements ReplyRenderer {
   }
 
   render(messages: VmAgentMessage[], sessionId: string, turnId?: string): boolean {
-    const accepted = messages.filter((message) => belongsToTurn(message, sessionId, turnId));
-    this.merged = mergeMessages(this.merged, accepted);
-
-    for (const message of accepted) {
-      const fingerprint = [message.id, messageKind(message), message.content, message.meta?.done, message.meta?.streamState].join("\u0000");
-      if (this.seen.has(fingerprint)) continue;
-      this.seen.add(fingerprint);
-      const target = streamTargetId(message);
-      const mergedTarget = target ? this.merged.find((item) => item.id === target) : undefined;
-      const eventMessage = isStreamDone(message) && mergedTarget ? mergedTarget : message;
-      this.event({
-        type: jsonEventType(message),
-        sessionId,
-        turnId: turnId || messageTurnId(message) || null,
-        message: eventMessage
-      });
+    const batch = this.reducer.consume(messages, sessionId, turnId);
+    for (const event of batch.events) {
+      if (event.type === "reasoning.summary") {
+        this.reasoningSummaries.push({
+          stage: event.stage,
+          status: event.status,
+          text: event.text,
+          messageId: event.message.id
+        });
+      } else if (event.type === "attachments") {
+        for (const [index, attachment] of event.attachments.entries()) {
+          const key = attachment.id || `${attachment.runId || event.runId || "run"}:${attachment.path || attachment.name || index}`;
+          this.publishedAttachments.set(key, attachment);
+        }
+      }
+      this.event(this.reducer.eventEnvelope(event, sessionId, turnId));
     }
+    if (batch.complete) this.completed = true;
+    return this.completed;
+  }
 
-    const final = this.finalMessage();
-    const done = accepted.some((message) => isStreamDone(message) || isFinalReply(message));
-    if (done && !this.completed) {
-      this.completed = true;
-      this.event({
-        type: "turn.completed",
-        sessionId,
-        turnId: turnId || (final ? messageTurnId(final) : undefined) || null,
-        finalResponse: final?.content || "",
-        finalMessageId: final?.id || null
-      });
-    }
-    return done;
+  finish(sessionId: string, turnId?: string): void {
+    if (!this.completed || this.completionEmitted) return;
+    this.completionEmitted = true;
+    const finalMessage = this.reducer.finalMessage();
+    this.event({
+      type: "turn.completed",
+      sessionId,
+      turnId: turnId || finalMessage?.meta?.turnId || finalMessage?.meta?.groupId || null,
+      finalResponse: finalMessage?.content || "",
+      finalMessageId: finalMessage?.id || null,
+      runId: finalMessage?.meta?.runId || null,
+      runStatus: finalMessage?.meta?.runStatus || null,
+      reasoningSummaries: this.reasoningSummaries,
+      attachments: [...this.publishedAttachments.values()]
+    });
   }
 
   finalMessage(): VmAgentMessage | undefined {
-    return [...this.merged].reverse().find((message) => isFinalReply(message));
+    return this.reducer.finalMessage();
   }
 }
 
 export function printError(error: unknown): void {
   const message = error instanceof Error ? error.message : String(error);
-  process.stderr.write(`${style.red("error:")} ${message}\n`);
+  process.stderr.write(`${style.red("error:")} ${terminalInline(message)}\n`);
 }
