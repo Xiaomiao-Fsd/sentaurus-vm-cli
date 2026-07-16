@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 import stringWidth from "string-width";
@@ -92,7 +95,11 @@ test("inline editor uses arrows for the palette and for history when the palette
     return [];
   };
   const editor = new InlineEditor((value) => suggestions(value), input, output);
-  const key = (text: string, name?: string) => input.emit("keypress", text, { name });
+  const key = (
+    text: string,
+    name?: string,
+    modifiers: { ctrl?: boolean; meta?: boolean; shift?: boolean } = {}
+  ) => input.emit("keypress", text, { name, ...modifiers });
 
   const first = editor.read();
   key("past");
@@ -123,5 +130,92 @@ test("inline editor uses arrows for the palette and for history when the palette
   key("\t", "tab");
   key("\r", "return");
   assert.deepEqual(await reopened, { type: "submit", value: "/help " });
+
+  const clipboardPaste = editor.read();
+  key("draft");
+  key("", "v", { ctrl: true, meta: true });
+  assert.deepEqual(await clipboardPaste, {
+    type: "paste-image",
+    draft: { value: "draft", cursor: 5 }
+  });
+
+  const resumed = editor.read({ value: "draft", cursor: 2 });
+  key("X");
+  key("\r", "return");
+  assert.deepEqual(await resumed, { type: "submit", value: "drXaft" });
   editor.close();
+});
+
+function ttyStreams(): { input: PassThrough & NodeJS.ReadStream; output: PassThrough & NodeJS.WriteStream } {
+  const input = new PassThrough() as PassThrough & NodeJS.ReadStream;
+  const output = new PassThrough() as PassThrough & NodeJS.WriteStream;
+  Object.assign(input, {
+    isTTY: true,
+    isRaw: false,
+    setRawMode(value: boolean) {
+      this.isRaw = value;
+      return this;
+    }
+  });
+  Object.assign(output, { isTTY: true, columns: 80 });
+  return { input, output };
+}
+
+async function nextInputTick(): Promise<void> {
+  await new Promise((resolve) => setImmediate(resolve));
+}
+
+async function waitForKeypressListener(input: PassThrough): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (input.listenerCount("keypress") > 0) return;
+    await nextInputTick();
+  }
+  assert.fail("Inline editor did not install its keypress listener");
+}
+
+test("inline editor restores submitted prompts from persistent history", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "sentaurus-vm-history-test-"));
+  const historyPath = path.join(directory, "input-history.jsonl");
+  try {
+    const firstStreams = ttyStreams();
+    const firstEditor = new InlineEditor(() => [], firstStreams.input, firstStreams.output, { historyPath });
+    const first = firstEditor.read();
+    await waitForKeypressListener(firstStreams.input);
+    firstStreams.input.emit("keypress", "first prompt", {});
+    firstStreams.input.emit("keypress", "\r", { name: "return" });
+    assert.deepEqual(await first, { type: "submit", value: "first prompt" });
+    await firstEditor.flushHistory();
+    firstEditor.close();
+
+    const secondStreams = ttyStreams();
+    const secondEditor = new InlineEditor(() => [], secondStreams.input, secondStreams.output, { historyPath });
+    const restored = secondEditor.read();
+    await waitForKeypressListener(secondStreams.input);
+    secondStreams.input.emit("keypress", "", { name: "up" });
+    secondStreams.input.emit("keypress", "\r", { name: "return" });
+    assert.deepEqual(await restored, { type: "submit", value: "first prompt" });
+    secondEditor.close();
+
+    assert.equal((await readFile(historyPath, "utf8")).trim(), JSON.stringify("first prompt"));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("inline editor skips malformed persistent history lines", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "sentaurus-vm-history-test-"));
+  const historyPath = path.join(directory, "input-history.jsonl");
+  try {
+    await writeFile(historyPath, `${JSON.stringify("valid prompt")}\nnot json\n${JSON.stringify(42)}\n`, "utf8");
+    const streams = ttyStreams();
+    const editor = new InlineEditor(() => [], streams.input, streams.output, { historyPath });
+    const restored = editor.read();
+    await waitForKeypressListener(streams.input);
+    streams.input.emit("keypress", "", { name: "up" });
+    streams.input.emit("keypress", "\r", { name: "return" });
+    assert.deepEqual(await restored, { type: "submit", value: "valid prompt" });
+    editor.close();
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });

@@ -55,6 +55,7 @@ const specs: readonly CommandSpec[] = [
   { name: "archive", summary: "Archive the active session locally", usage: "/archive", target: "local" },
   { name: "history", summary: "Reload recent conversation", usage: "/history", target: "local" },
   { name: "attach", summary: "Attach files to the next turn", usage: "/attach <path> [...]", target: "local", takesArguments: true },
+  { name: "paste-image", summary: "Attach the Windows clipboard image", usage: "/paste-image", target: "local" },
   { name: "attachments", summary: "List pending attachments", usage: "/attachments", target: "local" },
   {
     name: "detach", summary: "Remove pending attachments", usage: "/detach <number|all>", target: "local", takesArguments: true,
@@ -217,7 +218,8 @@ export class CommandRegistry {
       ]),
       "",
       "Slash suggestions open while typing. Up/Down selects and Tab completes.",
-      "Shift+Enter or Ctrl+J inserts a newline."
+      "Shift+Enter or Ctrl+J inserts a newline.",
+      "On Windows, Ctrl+V or Ctrl+Alt+V attaches the clipboard image."
     ].join("\n");
   }
 

@@ -2,8 +2,10 @@ import process from "node:process";
 import { SentaurusApi, ApiError } from "./api.js";
 import { matchingFile, uploadAttachments, type PendingAttachment } from "./attachments.js";
 import type { ChatOptions } from "./chat-options.js";
+import { captureClipboardImage } from "./clipboard-image.js";
 import { commandRegistry, type ParsedCommand } from "./commands.js";
-import { InlineEditor } from "./input-editor.js";
+import { inputHistoryPath } from "./config.js";
+import { InlineEditor, type InputDraft } from "./input-editor.js";
 import { mergeMessages } from "./messages.js";
 import { parseVmAgentModel } from "./models.js";
 import { SessionController } from "./session-controller.js";
@@ -81,7 +83,7 @@ export class ReplApp {
       sessions: this.state.sessionCandidates,
       models: this.state.status.llmModels || (this.state.status.llmModel ? [this.state.status.llmModel] : []),
       planSteps: this.state.workflow?.plan.steps.map((step) => step.id) || []
-    }));
+    }), process.stdin, process.stdout, { historyPath: inputHistoryPath(this.options.configPath) });
 
     const onSigint = () => {
       if (this.turns.cancel()) process.stdout.write(`\n${style.yellow("Cancelling active turn...")}\n`);
@@ -89,10 +91,21 @@ export class ReplApp {
     };
     process.on("SIGINT", onSigint);
     try {
+      let draft: InputDraft | undefined;
       while (true) {
-        const outcome = await this.editor.read();
+        const outcome = await this.editor.read(draft);
+        draft = undefined;
         if (outcome.type === "exit") break;
         if (outcome.type === "cancel") continue;
+        if (outcome.type === "paste-image") {
+          draft = outcome.draft;
+          try {
+            await this.pasteClipboardImage();
+          } catch (error) {
+            printError(error);
+          }
+          continue;
+        }
         const input = outcome.value.trim();
         if (!input) continue;
         try {
@@ -112,6 +125,7 @@ export class ReplApp {
       }
     } finally {
       process.off("SIGINT", onSigint);
+      await this.editor.flushHistory();
       this.editor.close();
     }
   }
@@ -165,6 +179,9 @@ export class ReplApp {
         if (!command.args.length) throw new Error(command.spec?.usage || "Usage: /attach <path>");
         this.state.pending.push(...await uploadAttachments(this.api, this.sessions.current.id, command.args, this.options));
         return;
+      case "paste-image":
+        await this.pasteClipboardImage();
+        return;
       case "attachments":
         if (!this.state.pending.length) process.stdout.write("No pending attachments.\n");
         this.state.pending.forEach((item, index) => process.stdout.write(`${index + 1}  ${item.ref.name}  ${item.ref.source}\n`));
@@ -201,6 +218,20 @@ export class ReplApp {
       }
       default:
         throw new Error(`Local command handler is missing for /${command.name}`);
+    }
+  }
+
+  private async pasteClipboardImage(): Promise<void> {
+    const captured = await captureClipboardImage();
+    try {
+      this.state.pending.push(...await uploadAttachments(
+        this.api,
+        this.sessions.current.id,
+        [captured.path],
+        this.options
+      ));
+    } finally {
+      await captured.cleanup();
     }
   }
 

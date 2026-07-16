@@ -112,9 +112,9 @@ test("renderers stream one reasoning item and ignore legacy progress", () => {
   const terminalRenderer = new TurnRenderer((value) => { terminal += value; });
   assert.equal(terminalRenderer.render([deltaOne, progress], "run_1", "turn_1"), false);
   assert.equal(terminalRenderer.render([deltaTwo, reasoningDone, final], "run_1", "turn_1"), true);
-  assert.match(terminal, /reasoning summary planning \/ streaming\nPlan safely\n\n/);
+  assert.match(terminal, /Plan safely\n\nsentaurus\nFinished/);
+  assert.doesNotMatch(terminal, /reasoning summary|planning \/ streaming/);
   assert.doesNotMatch(terminal, /Progress: redundant/);
-  assert.equal((terminal.match(/reasoning summary/g) || []).length, 1);
 
   let jsonl = "";
   const jsonRenderer = new JsonlTurnRenderer((value) => { jsonl += value; });
@@ -195,7 +195,8 @@ test("renderers expose safe summaries and concrete run artifacts", () => {
   let terminal = "";
   const terminalRenderer = new TurnRenderer((value) => { terminal += value; });
   assert.equal(terminalRenderer.render([summary, final, artifacts], "run_1", "turn_1"), true);
-  assert.match(terminal, /reasoning summary final \/ completed/);
+  assert.match(terminal, /最终结论来自结构化 DF-ISE 输出。/);
+  assert.doesNotMatch(terminal, /reasoning summary|final \/ completed/);
   assert.match(terminal, /SS_low=84\.037618 mV\/dec/);
   assert.match(terminal, /artifacts run_20260715_result/);
   assert.match(terminal, /\[image\] idvg_plot\.png \| artifacts\/idvg_plot\.png \| 4\.2 KiB/);

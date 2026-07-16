@@ -10,6 +10,7 @@ import type {
 } from "./types.js";
 import { MarkdownStream, renderMarkdown, sanitizeTerminalText } from "./markdown.js";
 import { TurnEventReducer, type CliEvent } from "./events.js";
+import { ReasoningSummaryBuffer, reasoningSummarySeparator } from "./reasoning-summary.js";
 import {
   isReasoningSummary,
   isReasoningSummaryDelta,
@@ -135,7 +136,8 @@ function attachmentLine(attachment: Partial<VmAgentMessageAttachment>, index: nu
 export class TurnRenderer {
   private readonly reducer = new TurnEventReducer();
   private readonly markdown = new MarkdownStream();
-  private readonly openReasoning = new Set<string>();
+  private readonly reasoning = new ReasoningSummaryBuffer();
+  private reasoningBlockCount = 0;
   private streamOpen = false;
   private readonly write: Writer;
 
@@ -146,6 +148,7 @@ export class TurnRenderer {
   render(messages: VmAgentMessage[], sessionId: string, turnId?: string): boolean {
     const batch = this.reducer.consume(messages, sessionId, turnId);
     for (const event of batch.events) this.renderEvent(event);
+    if (batch.complete) this.flushReasoning();
     return batch.complete;
   }
 
@@ -153,23 +156,30 @@ export class TurnRenderer {
     return this.reducer.finalMessage();
   }
 
+  finish(): void {
+    this.flushReasoning();
+  }
+
+  private renderReasoningBlocks(blocks: readonly string[]): void {
+    for (const block of blocks) {
+      if (this.reasoningBlockCount > 0) {
+        this.write(`${style.dim(reasoningSummarySeparator())}\n\n`);
+      }
+      this.write(`${renderMarkdown(block).trimEnd()}\n\n`);
+      this.reasoningBlockCount += 1;
+    }
+  }
+
+  private flushReasoning(): void {
+    this.renderReasoningBlocks(this.reasoning.flush());
+  }
+
   private renderEvent(event: CliEvent): void {
     if (event.type === "reasoning.summary.delta") {
-      if (!this.openReasoning.has(event.itemId)) {
-        this.write(`${style.yellow("reasoning summary")} ${style.dim(`${terminalInline(event.stage)} / streaming`)}\n`);
-        this.openReasoning.add(event.itemId);
-      }
-      this.write(style.dim(sanitizeTerminalText(event.text)));
       return;
     }
     if (event.type === "reasoning.summary") {
-      if (event.streamed && this.openReasoning.has(event.itemId)) {
-        this.write("\n\n");
-        this.openReasoning.delete(event.itemId);
-        return;
-      }
-      this.write(`${style.yellow("reasoning summary")} ${style.dim(`${terminalInline(event.stage)} / ${terminalInline(event.status)}`)}\n`);
-      this.write(`${renderMarkdown(event.text).trimEnd()}\n\n`);
+      this.renderReasoningBlocks(this.reasoning.push(event.text));
       return;
     }
     if (event.type === "worklog") {
@@ -177,6 +187,7 @@ export class TurnRenderer {
       return;
     }
     if (event.type === "attachments") {
+      this.flushReasoning();
       const run = event.runId ? ` ${style.dim(shortId(event.runId))}` : "";
       this.write(`${style.cyan("artifacts")}${run}\n`);
       if (event.attachments.length) {
@@ -190,6 +201,7 @@ export class TurnRenderer {
       return;
     }
     if (event.type === "response.delta") {
+      this.flushReasoning();
       if (!this.streamOpen) {
         this.write(`${style.green("sentaurus")}\n`);
         this.streamOpen = true;
@@ -199,6 +211,7 @@ export class TurnRenderer {
       return;
     }
     if (event.type === "response.completed" && event.streamed) {
+      this.flushReasoning();
       const rendered = this.markdown.flush();
       if (rendered) this.write(rendered);
       this.streamOpen = false;
@@ -210,6 +223,7 @@ export class TurnRenderer {
       this.write("\n");
       this.streamOpen = false;
     }
+    this.flushReasoning();
     const label = event.type === "error" ? style.red("system") : style.green("sentaurus");
     this.write(`${label}\n${renderMarkdown(event.text).trimEnd()}\n\n`);
   }

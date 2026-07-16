@@ -26,7 +26,9 @@ test("command registry drives help and dynamic completions", () => {
   assert.ok(completions.includes("/plan step inspect in_progress"));
   assert.ok(completions.includes("/resume run_123"));
   assert.ok(completions.includes("/model gpt-5.6-sol"));
+  assert.ok(completions.includes("/paste-image"));
   assert.match(commandRegistry.help(), /\/goal/);
+  assert.match(commandRegistry.help(), /Ctrl\+Alt\+V/);
   assert.match(commandRegistry.help("plan"), /read-only plan mode/i);
 });
 

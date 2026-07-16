@@ -1,16 +1,29 @@
 import { emitKeypressEvents } from "node:readline";
 import { createInterface, type Interface } from "node:readline/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
 import stringWidth from "string-width";
 
 export type ReadOutcome =
   | { type: "submit"; value: string }
+  | { type: "paste-image"; draft: InputDraft }
   | { type: "cancel" }
   | { type: "exit" };
+
+export type InputDraft = {
+  value: string;
+  cursor: number;
+};
 
 export type InputSuggestion = {
   label: string;
   replacement: string;
   description: string;
+};
+
+export type InputEditorOptions = {
+  historyPath?: string;
+  historyLimit?: number;
 };
 
 type Key = {
@@ -274,6 +287,10 @@ export class SuggestionController {
 
 export class InlineEditor {
   private readonly history: string[] = [];
+  private readonly historyPath: string | undefined;
+  private readonly historyLimit: number;
+  private historyLoaded?: Promise<void>;
+  private historyWrites = Promise.resolve();
   private fallback?: Interface;
   private closed = false;
   private interruptCurrent: (() => void) | undefined;
@@ -281,15 +298,19 @@ export class InlineEditor {
   constructor(
     private readonly suggestionProvider: (value: string, cursor: number) => readonly InputSuggestion[],
     private readonly input: NodeJS.ReadStream = process.stdin,
-    private readonly output: NodeJS.WriteStream = process.stdout
+    private readonly output: NodeJS.WriteStream = process.stdout,
+    options: InputEditorOptions = {}
   ) {
+    this.historyPath = options.historyPath;
+    this.historyLimit = Math.max(1, Math.floor(options.historyLimit || 500));
     if (!input.isTTY || !output.isTTY) {
       this.fallback = createInterface({ input, output, terminal: false });
     }
   }
 
-  async read(): Promise<ReadOutcome> {
+  async read(initialDraft?: InputDraft): Promise<ReadOutcome> {
     if (this.closed) return { type: "exit" };
+    if (this.historyPath) await this.loadHistory();
     if (this.fallback) {
       try {
         const value = await this.fallback.question("> ");
@@ -299,13 +320,17 @@ export class InlineEditor {
         return { type: "exit" };
       }
     }
-    return this.readRaw();
+    return this.readRaw(initialDraft);
   }
 
   close(): void {
     this.closed = true;
     this.interruptCurrent?.();
     this.fallback?.close();
+  }
+
+  async flushHistory(): Promise<void> {
+    await this.historyWrites;
   }
 
   interrupt(): boolean {
@@ -325,12 +350,49 @@ export class InlineEditor {
     const normalized = value.trim();
     if (!normalized || this.history.at(-1) === value) return;
     this.history.push(value);
-    if (this.history.length > 500) this.history.shift();
+    if (this.history.length > this.historyLimit) this.history.splice(0, this.history.length - this.historyLimit);
+    this.persistHistory(value);
   }
 
-  private readRaw(): Promise<ReadOutcome> {
+  private async loadHistory(): Promise<void> {
+    if (this.historyLoaded) return this.historyLoaded;
+    this.historyLoaded = (async () => {
+      if (!this.historyPath) return;
+      try {
+        const content = await readFile(this.historyPath, "utf8");
+        const values = content.split(/\r?\n/u).flatMap((line) => {
+          if (!line.trim()) return [];
+          try {
+            const value: unknown = JSON.parse(line);
+            return typeof value === "string" && value.trim() ? [value] : [];
+          } catch {
+            return [];
+          }
+        });
+        this.history.push(...values.slice(-this.historyLimit));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") return;
+      }
+    })();
+    return this.historyLoaded;
+  }
+
+  private persistHistory(value: string): void {
+    if (!this.historyPath) return;
+    const snapshot = `${this.history.map((item) => JSON.stringify(item)).join("\n")}\n`;
+    this.historyWrites = this.historyWrites.then(async () => {
+      await mkdir(path.dirname(this.historyPath!), { recursive: true });
+      await writeFile(this.historyPath!, snapshot, { encoding: "utf8", mode: 0o600 });
+    }).catch(() => undefined);
+  }
+
+  private readRaw(initialDraft?: InputDraft): Promise<ReadOutcome> {
     return new Promise((resolve, reject) => {
       const buffer = new InputBuffer();
+      if (initialDraft) {
+        buffer.replace(initialDraft.value);
+        buffer.cursor = Math.max(0, Math.min(initialDraft.cursor, buffer.value.length));
+      }
       const palette = new SuggestionController();
       let historyIndex = this.history.length;
       let historyDraft = "";
@@ -421,6 +483,13 @@ export class InlineEditor {
           }
           if (key.ctrl && key.name === "d" && !buffer.value) {
             finish({ type: "exit" });
+            return;
+          }
+          if (key.ctrl && key.name?.toLowerCase() === "v") {
+            finish({
+              type: "paste-image",
+              draft: { value: buffer.value, cursor: buffer.cursor }
+            });
             return;
           }
           if (key.name === "escape") {

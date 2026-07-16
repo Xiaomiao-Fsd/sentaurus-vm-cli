@@ -152,8 +152,10 @@ vm-agent model set gpt-5.6-terra
   `LLM_REASONING_EFFORT` 和模型超时，不读取或回传 API key。
 - 切换后自动重新部署并重启 worker；会话历史、目标、Sentaurus 文件和凭据保留。
 - `LLM_MODELS` 只保存当前所选模型，不做跨模型静默回退；失败会明确返回错误。
-- Responses 请求固定发送 `reasoning.effort=max`、`reasoning.summary=auto` 和 `stream=true`；worker 按 provider item 与 summary index 实时发布摘要 delta。若兼容端点拒绝 summary 字段，worker 会审计降级并自动重试。
-- CLI 只显示 provider 明确返回的摘要或 worker 根据执行状态生成的确定性摘要，不读取、传输或展示模型原始思维链。
+- Responses 请求固定发送 `reasoning.effort=max`、`reasoning.summary=auto` 和 `stream=true`；worker 按 provider item 与 summary index 发布摘要事件。若兼容端点拒绝 summary 字段，worker 会审计降级并自动重试。
+- worker 明确要求公开摘要使用简体中文，每个有意义的阶段更新约 100 到 200 字，覆盖当前进度、检查或修改的文件、具体问题和下一步解决/验证方法。
+- 人类可读终端不逐 token 显示摘要 delta，也不显示 `reasoning summary planning/streaming` 标签；它清洗并合并完整 item，只输出中文摘要正文，多个摘要之间使用横线分隔。
+- `--json` 仍保留原始 `reasoning.summary.delta` 和 `reasoning.summary` 事件，便于自动化消费者自行处理。CLI 不读取、传输或展示模型原始思维链。
 - Id-Vg 运行的最终回复由固定 DF-ISE 提取器的结构化结果生成，包含实际漏压、有效点数、Vth、SS、DIBL、对应恒流/电压点和关键产物，不再复用运行前预期文本。
 - 272k/353k 是总窗口。worker 在 85% 时压缩上下文、95% 时执行硬保护，为最终回复保留空间。
 
@@ -205,6 +207,8 @@ vm-agent exec review [INSTRUCTIONS]
 `status`、`doctor`、`sessions`、`history`、`features` 等查询命令的 `--json` 输出单个 JSON 文档。
 
 单轮聊天、`exec` 和 `review` 的 `--json` 输出 JSONL。每一行都是独立 JSON 对象，可能出现：
+
+下表描述的是机器接口。普通交互终端会缓冲完整 reasoning item，并按上述中文摘要规则聚合显示。
 
 | `type` | 含义 |
 | --- | --- |
@@ -287,7 +291,9 @@ vm-agent artifact sentaurus-run-id plots\idvg.png --output .\idvg.png
 
 `vm-agent` 使用稳定的 `> ` / `| ` 内联编辑器。Windows OpenSSH 会话启动 CLI 时会自动把
 控制台从代码页 936 切换到 UTF-8，因此可以直接输入或粘贴中文；编辑器按 grapheme 移动，
-不会从 UTF-16 代理项或组合字符中间截断中文、emoji 或组合字符。
+不会从 UTF-16 代理项或组合字符中间截断中文、emoji 或组合字符。已提交的输入会持久化到
+本地配置目录，因此下次启动 `vm-agent` 或 `sentaurus-vm` 后仍可用 Up/Down 恢复；可用
+`SENTAURUS_VM_INPUT_HISTORY` 指定历史文件路径。
 
 当单行输入以 `/` 开头且光标位于末尾时，CLI 会自动显示命令提示框。候选项包含完整命令和
 一行简介；输入更多字符会实时过滤。`/goal `、`/plan `、`/model ` 等会继续显示子命令，

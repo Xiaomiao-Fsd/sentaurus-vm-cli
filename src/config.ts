@@ -21,6 +21,10 @@ export function defaultConfigPath(): string {
   return process.env.SENTAURUS_VM_CONFIG || path.join(os.homedir(), ".sentaurus-vm-cli", "config.json");
 }
 
+export function inputHistoryPath(configPath = defaultConfigPath()): string {
+  return process.env.SENTAURUS_VM_INPUT_HISTORY || path.join(path.dirname(configPath), "input-history.jsonl");
+}
+
 export function normalizeApiUrl(value: string): string {
   const trimmed = value.trim().replace(/\/+$/, "");
   if (!trimmed) return "";

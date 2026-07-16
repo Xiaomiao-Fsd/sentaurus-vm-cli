@@ -13,7 +13,7 @@ export const cliFeatures: CliFeature[] = [
   { name: "interactive_session_selector", stage: "stable", source: "cli", description: "TTY session picker for resume --all with keyboard navigation" },
   { name: "provisional_session_titles", stage: "stable", source: "cli", description: "First natural-language prompt replaces the neutral title of a new session" },
   { name: "markdown_streaming", stage: "stable", source: "cli", description: "Width-aware incremental Markdown, code block, and table rendering" },
-  { name: "reasoning_summaries", stage: "stable", source: "worker", description: "Provider-approved or deterministic execution summaries without private reasoning traces" },
+  { name: "reasoning_summaries", stage: "stable", source: "worker", description: "Chinese phase digests aggregated from provider-approved or deterministic public summaries" },
   { name: "structured_run_results", stage: "stable", source: "worker", description: "Final Id-Vg replies grounded in fixed extractor metrics rather than pre-run expectations" },
   { name: "artifact_events", stage: "stable", source: "cli", description: "Typed terminal and JSONL events for published simulation files and plots" },
   { name: "non_interactive_exec", stage: "stable", source: "cli", description: "Single-turn execution with stdin support" },

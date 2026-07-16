@@ -29,8 +29,9 @@ CentOS 7 VM worker
 ## 功能
 
 - Codex 风格的持续对话、会话新建和恢复
-- SSE 增量回复、流式 reasoning item、结构化 tool/run worklog 与并发会话隔离
-- 实时显示 provider 许可或确定性执行摘要，不输出模型原始思维链
+- SSE 增量回复、reasoning item 协议、结构化 tool/run worklog 与并发会话隔离
+- 交互终端把完整 reasoning item 聚合为约 100 到 200 字的中文阶段摘要，正文间用横线分隔
+- 只显示 provider 许可或确定性执行摘要，不输出模型原始思维链
 - Id-Vg 最终回复直接显示固定提取器得到的 Vth、两点法/窗口法 SS、DIBL 与对应偏压
 - 仿真曲线、指标 JSON/DAT、CSV 和报告以结构化终端/JSONL 产物事件发布
 - 输入 `/` 即时显示 slash command 提示框，包含一行简介、方向键选择和 Tab 补齐
@@ -100,8 +101,12 @@ vm-agent
 启动/等待 Fastify 服务、通过 `sentaurus-centos7` SSH 检查 CentOS 7 worker、仅在 worker
 未运行时执行 `connect`，最后进入交互会话。token 不需要传给外部设备，也不会出现在命令行。
 进入交互会话后，在 `> ` 提示符输入中文并按 Enter 发送；`Shift+Enter` 或
-`Ctrl+J` 插入换行。输入 `/` 会立即打开命令提示框，`Up`/`Down` 选择，Tab 补齐，
-`Esc` 关闭；提示框关闭时 `Up`/`Down` 仍用于浏览输入历史。
+`Ctrl+J` 插入换行。Windows 下按 `Ctrl+V` 或 `Ctrl+Alt+V` 可将剪贴板图片附加到
+下一轮消息；终端拦截 `Ctrl+V` 时使用 `Ctrl+Alt+V`，也可输入 `/paste-image`。
+输入 `/` 会立即打开命令提示框，`Up`/`Down` 选择，Tab 补齐，`Esc` 关闭；提示框
+关闭时 `Up`/`Down` 仍用于浏览输入历史。已提交的输入会保存到本地配置目录，
+下次进入 `vm-agent` 或 `sentaurus-vm` 后仍可恢复；可设置 `SENTAURUS_VM_INPUT_HISTORY`
+更改历史文件路径。
 
 恢复会话时可以直接打开全量选择框：
 
@@ -184,6 +189,7 @@ sentaurus-vm chat --attach .\device.cmd "审阅并运行这个 deck"
 
 ```text
 /attach "C:\TCAD Inputs\device.cmd"
+/paste-image
 请检查接触、网格和物理模型，然后运行最小验证。
 ```
 
